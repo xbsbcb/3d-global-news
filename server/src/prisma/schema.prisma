@@ -1,0 +1,54 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model News {
+  id            String    @id @default(uuid())
+  title         String    @db.VarChar(500)
+  titleHash     String    @db.VarChar(50)
+  summary       String?   @db.Text
+  content       String?   @db.Text
+  source        String?   @db.VarChar(255)
+  sourceUrl     String?   @db.Text
+  categoryId    String?
+  country        String?   @db.VarChar(100)
+  city           String?   @db.VarChar(100)
+  latitude       Float?
+  longitude      Float?
+  publishedAt   DateTime?
+  fetchedAt      DateTime  @default(now())
+  isTranslated   Boolean   @default(false)
+  language       String    @default("en") @db.VarChar(10)
+  status         String    @default("active") @db.VarChar(20)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  category       Category? @relation(fields: [categoryId], references: [id])
+
+  @@unique([titleHash, source])
+  @@index([publishedAt(sort: Desc)])
+  @@index([categoryId])
+  @@index([status])
+  @@index([latitude, longitude])
+}
+
+model Category {
+  id    String @id @default(uuid())
+  name  String @db.VarChar(50) @unique
+  slug  String @db.VarChar(50) @unique
+  color String @default("#00d4ff") @db.VarChar(20)
+
+  news  News[]
+}
+
+model Config {
+  id        String   @id @default(uuid())
+  key       String   @unique @db.VarChar(100)
+  value     String?  @db.Text
+  updatedAt DateTime @updatedAt
+}
