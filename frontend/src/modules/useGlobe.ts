@@ -72,6 +72,7 @@ export function useGlobe(options: UseGlobeOptions) {
       earthScene.controls,
       earthScene.earthGroup
     )
+    interactionManager.setGeoLayer(geoLayer)
 
     isReady.value = true
     animate()

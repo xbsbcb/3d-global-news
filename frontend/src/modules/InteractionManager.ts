@@ -15,6 +15,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import gsap from 'gsap'
 // import type { ParticleEarth } from './ParticleEarth'  // 暂时禁用散射
+import type { GeoLayer } from './GeoLayer'
 
 export interface FlyToConfig {
   lat: number
@@ -44,6 +45,7 @@ export class InteractionManager {
   private controls: OrbitControls
   private earthGroup: THREE.Group
   // private particleEarth: ParticleEarth | null = null  // 暂时禁用散射
+  private geoLayer: GeoLayer | null = null
   private raycaster: THREE.Raycaster
   private mouse: THREE.Vector2
 
@@ -82,6 +84,10 @@ export class InteractionManager {
   // public setParticleEarth(particleEarth: ParticleEarth): void {
   //   this.particleEarth = particleEarth
   // }
+
+  public setGeoLayer(geoLayer: GeoLayer): void {
+    this.geoLayer = geoLayer
+  }
 
   private initListeners(): void {
     const canvas = window.document.querySelector('canvas')
@@ -159,7 +165,7 @@ export class InteractionManager {
     // }
 
     // 3. 计算合适的相机距离
-    const distance = this.calculateFocusDistance()
+    const distance = this.calculateFocusDistance(config.lat, config.lng)
 
     // 4. 计算目标点位置和相机位置
     const targetPoint = this.latLngToVector3(config.lat, config.lng, 100)
@@ -259,12 +265,24 @@ export class InteractionManager {
   }
 
   /**
-   * 计算聚焦距离 - 统一逻辑，国家和非国家相同
+   * 计算聚焦距离 - 基于地理范围，使国家占屏幕比例一致
    */
-  private calculateFocusDistance(): number {
-    // 统一使用 150 作为聚焦距离
-    // 不再做地理范围计算
-    return 150
+  private calculateFocusDistance(lat: number, lng: number): number {
+    if (!this.geoLayer) return 150
+
+    const countryName = this.geoLayer.findCountryAtPoint(lat, lng)
+    if (!countryName) return 150
+
+    const bounds = this.geoLayer.getCountryBounds(countryName)
+    if (!bounds) return 150
+
+    const latSpan = bounds.maxLat - bounds.minLat
+    const lngSpan = bounds.maxLng - bounds.minLng
+    const span = Math.max(latSpan, lngSpan, 5)  // 最小跨度5度
+
+    // 基于地理范围计算距离：跨度越大，距离越远
+    const distance = Math.max(100, Math.min(250, 400 / span))
+    return distance
   }
 
   /**
