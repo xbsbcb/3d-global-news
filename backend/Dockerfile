@@ -35,7 +35,7 @@ COPY --from=builder /app/target/release/globe-news-api /usr/local/bin/
 # Create data directory
 RUN mkdir -p /app/data
 
-ENV DATABASE_URL=sqlite:/app/data/globe_news.db
+ENV DATABASE_URL=sqlite:///app/data/globe_news.db?mode=rwc
 ENV RUST_LOG=info
 ENV PORT=8080
 

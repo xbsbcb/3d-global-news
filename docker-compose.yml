@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Frontend (Vue 3 + Nginx)
   frontend:
@@ -23,7 +21,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - DATABASE_URL=sqlite:/app/data/globe_news.db
+      - DATABASE_URL=sqlite:///app/data/globe_news.db?mode=rwc
       - WORLDNEWS_API_KEY=${WORLDNEWS_API_KEY:-cf06fcc50d56424d9f3fe328f91ceb91}
       - RUST_LOG=info
       - PORT=8080

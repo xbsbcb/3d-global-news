@@ -5,7 +5,9 @@ WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
-RUN npm ci
+
+# Install dependencies (ignore scripts to skip native module builds like canvas)
+RUN npm ci --ignore-scripts
 
 # Copy source
 COPY . .
