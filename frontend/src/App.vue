@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import HelloWorld from './components/HelloWorld.vue'
+import GlobeView from './components/Earth/GlobeView.vue'
 </script>
 
 <template>
-  <HelloWorld />
+  <GlobeView />
 </template>
