@@ -200,10 +200,11 @@ export class GeoLayer {
         // 2. 绘制边界线（稍高）
         const linePoints = points.map(p => {
           const dir = p.clone().normalize()
-          return p.clone().add(dir.multiplyScalar(this.LINE_OFFSET - this.FILL_OFFSET))
+          return p.clone().add(dir.multiplyScalar(this.LINE_OFFSET))
         })
-        linePoints.push(linePoints[0].clone())
-        const geometry = new THREE.BufferGeometry().setFromPoints(linePoints)
+        // 闭合线条
+        const closedLinePoints = [...linePoints, linePoints[0].clone()]
+        const geometry = new THREE.BufferGeometry().setFromPoints(closedLinePoints)
         const line = new THREE.Line(geometry, material)
         this.allLines.set(countryName + '_' + this.allLines.size, line)
         this.group.add(line)
@@ -212,7 +213,7 @@ export class GeoLayer {
   }
 
   /**
-   * 创建填充多边形（三角剖分）
+   * 创建填充多边形（使用 ShapeGeometry 三角化）
    */
   private createFillPolygon(points: THREE.Vector3[]): THREE.Mesh | null {
     if (points.length < 3) return null
@@ -222,26 +223,33 @@ export class GeoLayer {
     points.forEach(p => centroid.add(p))
     centroid.divideScalar(points.length)
 
-    // 创建顶点数组（中心点 + 外环点）
-    const vertices: number[] = []
-    // 中心点
-    vertices.push(centroid.x, centroid.y, centroid.z)
-    // 外环点
-    points.forEach(p => vertices.push(p.x, p.y, p.z))
+    // 计算法线方向（指向球心外侧）
+    const normal = centroid.clone().normalize()
 
-    // 创建索引（三角剖分：从中心点到每条边）
-    const indices: number[] = []
-    for (let i = 1; i < points.length; i++) {
-      indices.push(0, i, i + 1)
-    }
-    // 最后一个三角形
-    indices.push(0, points.length, 1)
+    // 计算局部坐标系（用于将3D点转换到2D平面）
+    const up = new THREE.Vector3(0, 1, 0)
+    const tangent = new THREE.Vector3().crossVectors(up, normal).normalize()
+    const bitangent = new THREE.Vector3().crossVectors(normal, tangent).normalize()
 
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
-    geometry.setIndex(indices)
+    // 将 3D 球面点转换到 2D 平面坐标
+    const shapePoints: THREE.Vector2[] = points.map(p => {
+      const rel = p.clone().sub(centroid)
+      const x = rel.dot(tangent)
+      const y = rel.dot(bitangent)
+      return new THREE.Vector2(x, y)
+    })
 
+    // 创建 Shape 并三角化
+    const shape = new THREE.Shape(shapePoints)
+    const geometry = new THREE.ShapeGeometry(shape)
+
+    // 创建网格
     const mesh = new THREE.Mesh(geometry, this.fillMaterial.clone())
+
+    // 将网格放置到正确位置和方向
+    mesh.position.copy(centroid)
+    mesh.lookAt(centroid.clone().add(normal))
+
     return mesh
   }
 
