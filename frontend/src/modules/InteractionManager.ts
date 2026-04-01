@@ -14,7 +14,7 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import gsap from 'gsap'
-import type { ParticleEarth } from './ParticleEarth'
+// import type { ParticleEarth } from './ParticleEarth'  // 暂时禁用散射
 
 export interface FlyToConfig {
   lat: number
@@ -43,7 +43,7 @@ export class InteractionManager {
   private camera: THREE.PerspectiveCamera
   private controls: OrbitControls
   private earthGroup: THREE.Group
-  private particleEarth: ParticleEarth | null = null
+  // private particleEarth: ParticleEarth | null = null  // 暂时禁用散射
   private raycaster: THREE.Raycaster
   private mouse: THREE.Vector2
 
@@ -62,13 +62,13 @@ export class InteractionManager {
   constructor(
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
-    earthGroup: THREE.Group,
-    particleEarth?: ParticleEarth | null
+    earthGroup: THREE.Group
+    // particleEarth?: ParticleEarth | null  // 暂时禁用散射
   ) {
     this.camera = camera
     this.controls = controls
     this.earthGroup = earthGroup
-    this.particleEarth = particleEarth ?? null
+    // this.particleEarth = particleEarth ?? null  // 暂时禁用散射
     this.raycaster = new THREE.Raycaster()
     this.mouse = new THREE.Vector2()
 
@@ -79,9 +79,9 @@ export class InteractionManager {
     this.initListeners()
   }
 
-  public setParticleEarth(particleEarth: ParticleEarth): void {
-    this.particleEarth = particleEarth
-  }
+  // public setParticleEarth(particleEarth: ParticleEarth): void {
+  //   this.particleEarth = particleEarth
+  // }
 
   private initListeners(): void {
     const canvas = window.document.querySelector('canvas')
@@ -153,10 +153,10 @@ export class InteractionManager {
     this.originalGroupRotation.copy(this.earthGroup.rotation)
     this.originalGroupScale = this.earthGroup.scale.x
 
-    // 2. 粒子散开消失
-    if (this.particleEarth) {
-      this.particleEarth.setScatter(1.0, 0.4)  // 直接设置到1，0.4s
-    }
+    // 2. 粒子散开消失 (暂时取消)
+    // if (this.particleEarth) {
+    //   this.particleEarth.setScatter(1.0, 0.4)
+    // }
 
     // 3. 计算合适的相机距离
     const distance = this.calculateFocusDistance()
@@ -170,10 +170,10 @@ export class InteractionManager {
     const tl = gsap.timeline({
       onComplete: () => {
         this.controls.enabled = true
-        // 4. 聚拢回来
-        if (this.particleEarth) {
-          this.particleEarth.setScatter(0.0, 0.4)
-        }
+        // 4. 聚拢回来 (暂时取消)
+        // if (this.particleEarth) {
+        //   this.particleEarth.setScatter(0.0, 0.4)
+        // }
       }
     })
 
@@ -208,10 +208,10 @@ export class InteractionManager {
 
     const duration = 0.8
 
-    // 1. 粒子散开
-    if (this.particleEarth) {
-      this.particleEarth.setScatter(1.0, 0.3)
-    }
+    // 1. 粒子散开 (暂时取消)
+    // if (this.particleEarth) {
+    //   this.particleEarth.setScatter(1.0, 0.3)
+    // }
 
     // 2. 重置 earthGroup
     gsap.to(this.earthGroup.rotation, {
@@ -250,10 +250,10 @@ export class InteractionManager {
       },
       onComplete: () => {
         this.controls.enabled = true
-        // 4. 粒子聚拢回来
-        if (this.particleEarth) {
-          this.particleEarth.setScatter(0.0, 0.4)
-        }
+        // 4. 粒子聚拢回来 (暂时取消)
+        // if (this.particleEarth) {
+        //   this.particleEarth.setScatter(0.0, 0.4)
+        // }
       }
     })
   }

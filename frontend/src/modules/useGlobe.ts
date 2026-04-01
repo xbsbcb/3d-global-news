@@ -70,8 +70,7 @@ export function useGlobe(options: UseGlobeOptions) {
     interactionManager = new InteractionManager(
       earthScene.camera,
       earthScene.controls,
-      earthScene.earthGroup,
-      particleEarth
+      earthScene.earthGroup
     )
 
     isReady.value = true
