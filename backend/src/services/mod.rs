@@ -1,4 +1,3 @@
-//! 业务服务模块
+//! 服务模块
 
-pub mod database;
-pub mod fetcher;
+pub mod worldnews;
