@@ -3,8 +3,7 @@
 //! 基于 https://api.worldnewsapi.com 的新闻采集
 
 use crate::db::DbPool;
-use crate::models::{CreateNews, WorldNewsItem, WorldNewsSearchResponse};
-use serde::Deserialize;
+use crate::models::{CreateNews, WorldNewsSearchResponse};
 
 const BASE_URL: &str = "https://api.worldnewsapi.com";
 
@@ -78,8 +77,11 @@ impl WorldNewsService {
             for term in &search_terms {
                 match self.search_news(term, lang, 0, 20).await {
                     Ok(response) => {
-                        if let Some(news_list) = response.news {
-                            for item in news_list {
+                        let news_list = response.news;
+                        let news_count = news_list.as_ref().map(|n| n.len()).unwrap_or(0);
+
+                        if let Some(items) = news_list {
+                            for item in items {
                                 // 跳过没有坐标的新闻
                                 if item.latitude().is_none() || item.longitude().is_none() {
                                     continue;
@@ -112,10 +114,7 @@ impl WorldNewsService {
                                 }
                             }
                         }
-                        log::info!("{} {}: 找到 {} 条新闻",
-                            lang, term,
-                            response.news.as_ref().map(|n| n.len()).unwrap_or(0)
-                        );
+                        log::info!("{} {}: 找到 {} 条新闻", lang, term, news_count);
                     }
                     Err(e) => {
                         log::error!("搜索 {} {} 失败: {}", lang, term, e);

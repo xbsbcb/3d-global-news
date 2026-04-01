@@ -171,7 +171,7 @@ pub async fn create_news(pool: &DbPool, news: &CreateNews) -> Result<News, sqlx:
     .bind(&news.city)
     .bind(news.latitude)
     .bind(news.longitude)
-    .bind(news.published_at)
+    .bind(news.published_at.clone())
     .execute(pool)
     .await?;
 

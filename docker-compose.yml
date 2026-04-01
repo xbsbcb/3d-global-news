@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  # Frontend (Vue 3 + Nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:3000/api
+    depends_on:
+      - backend
+    networks:
+      - globe-network
+
+  # Backend (Rust + Axum)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=sqlite:/app/data/globe_news.db
+      - WORLDNEWS_API_KEY=${WORLDNEWS_API_KEY:-cf06fcc50d56424d9f3fe328f91ceb91}
+      - RUST_LOG=info
+      - PORT=8080
+    volumes:
+      - globe-data:/app/data
+    networks:
+      - globe-network
+
+  # Optional: Adminer for SQLite management
+  adminer:
+    image: adminer
+    ports:
+      - "8081:8080"
+    depends_on:
+      - backend
+    networks:
+      - globe-network
+    profiles:
+      - admin
+
+networks:
+  globe-network:
+    driver: bridge
+
+volumes:
+  globe-data:
