@@ -1,6 +1,11 @@
 /**
  * useGlobe - Vue Composables 封装
  * 方便在 Vue 组件中使用 3D 地球模块
+ *
+ * 架构：
+ * - earthGroup 包含 particleEarth 和 geoLayer
+ * - 所有子层跟随 earthGroup 旋转/缩放
+ * - 聚焦动画独立于 earthGroup
  */
 
 import { ref, onMounted, onUnmounted, type Ref } from 'vue'
@@ -34,23 +39,23 @@ export function useGlobe(options: UseGlobeOptions) {
   const init = async () => {
     if (!container.value) return
 
-    // 1. 初始化场景
+    // 1. 初始化场景（包含 earthGroup）
     earthScene = new EarthScene({
       container: container.value,
       width: container.value.clientWidth,
       height: container.value.clientHeight
     })
 
-    // 2. 初始化粒子地球
+    // 2. 初始化粒子地球（添加到 earthGroup）
     particleEarth = new ParticleEarth({
-      scene: earthScene.scene,
+      scene: earthScene.earthGroup,  // 直接添加到 earthGroup
       radius,
       particleCount
     })
 
-    // 3. 初始化地理边界
+    // 3. 初始化地理边界（也添加到同一个 earthGroup）
     geoLayer = new GeoLayer({
-      scene: earthScene.scene,
+      scene: earthScene.earthGroup,  // 和粒子共享同一个父容器
       radius
     })
     await geoLayer.load()
@@ -65,6 +70,7 @@ export function useGlobe(options: UseGlobeOptions) {
     interactionManager = new InteractionManager(
       earthScene.camera,
       earthScene.controls,
+      earthScene.earthGroup,
       particleEarth
     )
 
@@ -75,11 +81,10 @@ export function useGlobe(options: UseGlobeOptions) {
   const animate = () => {
     const time = performance.now() * 0.001
 
-    if (particleEarth) {
+    if (particleEarth && earthScene) {
       particleEarth.update(time)
-    }
-    if (dataLayer) {
-      dataLayer.update(time)
+      // 更新相机距离用于散射计算
+      particleEarth.setCameraDistance(earthScene.camera.position.length())
     }
     if (earthScene) {
       earthScene.render()
