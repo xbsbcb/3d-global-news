@@ -197,10 +197,10 @@ export class GeoLayer {
   }
 
   /**
-   * 创建国家填充粒子（差异化的稀疏、明暗、大小）
+   * 创建国家填充粒子（大而稀疏，与海洋区分）
    */
   private createCountryFillParticles(): void {
-    const particleCount = 30000  // 比主例子层稀疏
+    const particleCount = 15000  // 比主粒子层稀疏
     const positions = new Float32Array(particleCount * 3)
     const colors = new Float32Array(particleCount * 3)
     const sizes = new Float32Array(particleCount)
@@ -226,14 +226,14 @@ export class GeoLayer {
         positions[index * 3 + 1] = pos.y
         positions[index * 3 + 2] = pos.z
 
-        // 差异化颜色（明暗变化）
-        const brightness = 0.4 + Math.random() * 0.3  // 0.4-0.7 的亮度
-        colors[index * 3] = brightness * 0.2     // R - 蓝色调
-        colors[index * 3 + 1] = brightness * 0.4  // G
-        colors[index * 3 + 2] = brightness * 0.8  // B
+        // 差异化颜色（明暗变化）- 国家填充稍亮
+        const brightness = 0.5 + Math.random() * 0.3  // 0.5-0.8 的亮度
+        colors[index * 3] = brightness * 0.3     // R - 蓝色调
+        colors[index * 3 + 1] = brightness * 0.5  // G
+        colors[index * 3 + 2] = brightness * 0.9  // B
 
-        // 差异化大小（3-6像素）
-        sizes[index] = 3 + Math.random() * 3
+        // 大而稀疏（8-20像素）
+        sizes[index] = 8 + Math.random() * 12
 
         index++
       }
@@ -264,7 +264,7 @@ export class GeoLayer {
           vec2 center = gl_PointCoord - vec2(0.5);
           float r = length(center) * 2.0;
           if (r > 1.0) discard;
-          float alpha = smoothstep(1.0, 0.5, r) * 0.6;
+          float alpha = smoothstep(1.0, 0.3, r) * 0.7;
           gl_FragColor = vec4(vColor, alpha);
         }
       `,

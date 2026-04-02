@@ -127,15 +127,13 @@ export class InteractionManager {
       this.autoCorrectTimer = null
     }
 
-    // 通过 camera.position.y 检测上下倾斜程度
-    // 相机距离为 length()，y 方向偏移反映倾斜
-    const cameraPos = this.camera.position
-    const cameraRadius = cameraPos.length()
-    const normalizedY = Math.abs(cameraPos.y / cameraRadius)
+    // 从相机位置计算 phi
+    const cameraRadius = this.camera.position.length()
+    const phi = Math.acos(Math.abs(this.camera.position.y) / cameraRadius)
 
-    // 如果相机倾斜超过阈值（normalizedY > sin(threshold)）
-    if (normalizedY > Math.sin(this.TILT_THRESHOLD)) {
-      // 启动自动回正定时器
+    // 如果 phi 偏离赤道位置超过阈值，启动定时器
+    const phiDiff = Math.abs(phi - Math.PI / 2)
+    if (phiDiff > this.TILT_THRESHOLD) {
       this.autoCorrectTimer = window.setTimeout(() => {
         this.autoCorrectRotation()
       }, this.AUTO_CORRECT_DELAY)
@@ -143,31 +141,36 @@ export class InteractionManager {
   }
 
   /**
-   * 自动回正旋转 - 使用 OrbitControls 的 spherical
+   * 自动回正旋转 - 基于相机位置的 phi 计算
    */
   private autoCorrectRotation(): void {
     if (this.state !== 'normal') return
     if (!this.controls.enabled) return
 
-    // 获取当前的 spherical phi (OrbitControls 内部有 spherical 属性)
-    const controlsAny = this.controls as any
-    const currentPhi = controlsAny.spherical?.phi ?? (Math.PI / 2)
+    // 从相机位置计算当前的 phi（上下倾斜角度）
+    // phi = 0 表示相机在北极正上方，phi = PI/2 表示在赤道高度
+    const cameraRadius = this.camera.position.length()
+    const phi = Math.acos(Math.abs(this.camera.position.y) / cameraRadius)
 
-    // 只有当 phi 偏离赤道位置时才回正
-    const phiDiff = Math.abs(currentPhi - Math.PI / 2)
+    // 只有当 phi 偏离赤道位置(PI/2)时才回正
+    const phiDiff = Math.abs(phi - Math.PI / 2)
     if (phiDiff < this.TILT_THRESHOLD) return
 
-    // 记录目标 phi（赤道位置）
+    // 计算目标相机位置（保持当前距离和方位角，只调整 phi 到 PI/2）
+    const theta = Math.atan2(this.camera.position.x, this.camera.position.z)  // 方位角
+    const radius = cameraRadius
     const targetPhi = Math.PI / 2
 
-    // 使用球面插值回正
-    gsap.to(controlsAny.spherical, {
-      phi: targetPhi,
+    const targetX = radius * Math.sin(targetPhi) * Math.sin(theta)
+    const targetY = radius * Math.cos(targetPhi)
+    const targetZ = radius * Math.sin(targetPhi) * Math.cos(theta)
+
+    gsap.to(this.camera.position, {
+      x: targetX,
+      y: targetY,
+      z: targetZ,
       duration: this.AUTO_CORRECT_DURATION,
-      ease: 'power2.out',
-      onUpdate: () => {
-        this.controls.update()
-      }
+      ease: 'power2.out'
     })
   }
 
@@ -368,12 +371,13 @@ export class InteractionManager {
 
   /**
    * 计算聚焦距离 - 基于地理范围，使国家占屏幕比例一致
+   * 大国家 → 高相机（远距离），小国家 → 低相机（近距离）
    */
   private calculateFocusDistance(lat: number, lng: number): number {
     if (!this.geoLayer) return 150
 
     const countryName = this.geoLayer.findCountryAtPoint(lat, lng)
-    if (!countryName) return 150
+    if (!countryName) return 150  // 海洋或其他地区用默认距离
 
     const bounds = this.geoLayer.getCountryBounds(countryName)
     if (!bounds) return 150
@@ -382,8 +386,9 @@ export class InteractionManager {
     const lngSpan = bounds.maxLng - bounds.minLng
     const span = Math.max(latSpan, lngSpan, 5)  // 最小跨度5度
 
-    // 基于地理范围计算距离：跨度越大，距离越远
-    const distance = Math.max(100, Math.min(250, 400 / span))
+    // 基于地理范围计算距离：跨度越大，距离越远（相机越高）
+    // span=5 → distance≈80, span=60 → distance≈250
+    const distance = Math.min(250, Math.max(80, 50 + span * 3.5))
     return distance
   }
 
