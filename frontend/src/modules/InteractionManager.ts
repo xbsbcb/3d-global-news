@@ -61,6 +61,11 @@ export class InteractionManager {
   private mouseDownPos = { x: 0, y: 0 }
   private hasDragged = false
 
+  // 自动回正定时器
+  private autoCorrectTimer: number | null = null
+  private readonly AUTO_CORRECT_DELAY = 2000  // 2秒后自动回正
+  private readonly AUTO_CORRECT_DURATION = 0.5  // 回正动画时长
+
   constructor(
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
@@ -96,21 +101,47 @@ export class InteractionManager {
       canvas.addEventListener('mouseup', (e) => this.onMouseUp(e))
       canvas.addEventListener('click', (e) => this.onCanvasClick(e))
       canvas.addEventListener('contextmenu', (e) => this.onRightClick(e))
-      // 中键回到默认大小
-      canvas.addEventListener('auxclick', (e) => this.onMiddleClick(e))
+    }
+
+    // 监听 controls 变化用于自动回正
+    this.controls.addEventListener('change', () => this.onControlsChange())
+  }
+
+  /**
+   * Controls 变化时，重置自动回正定时器
+   */
+  private onControlsChange(): void {
+    if (this.state !== 'normal') return
+
+    // 清除之前的定时器
+    if (this.autoCorrectTimer !== null) {
+      clearTimeout(this.autoCorrectTimer)
+      this.autoCorrectTimer = null
+    }
+
+    // 检查是否有明显的旋转偏移（上下旋转，即 x 轴旋转）
+    const rotX = this.earthGroup.rotation.x
+    if (Math.abs(rotX) > 0.05) {  // 超过约3度
+      // 启动自动回正定时器
+      this.autoCorrectTimer = window.setTimeout(() => {
+        this.autoCorrectRotation()
+      }, this.AUTO_CORRECT_DELAY)
     }
   }
 
   /**
-   * 中键回到默认大小
+   * 自动回正旋转
    */
-  private onMiddleClick(event: MouseEvent): void {
-    if (event.button === 1) {  // 中键
-      event.preventDefault()
-      if (this.state === 'focused') {
-        this.cancelFocus()
-      }
-    }
+  private autoCorrectRotation(): void {
+    if (this.state !== 'normal') return
+    if (gsap.isTweening(this.earthGroup.rotation)) return
+
+    gsap.to(this.earthGroup.rotation, {
+      x: 0,
+      z: 0,
+      duration: this.AUTO_CORRECT_DURATION,
+      ease: 'power2.out'
+    })
   }
 
   private onMouseDown(event: MouseEvent): void {
@@ -398,6 +429,10 @@ export class InteractionManager {
   }
 
   public dispose(): void {
-    // cleanup
+    if (this.autoCorrectTimer !== null) {
+      clearTimeout(this.autoCorrectTimer)
+      this.autoCorrectTimer = null
+    }
+    this.controls.removeEventListener('change', () => this.onControlsChange())
   }
 }
