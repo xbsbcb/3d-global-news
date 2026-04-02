@@ -111,6 +111,13 @@ export class InteractionManager {
    * Controls 变化时，重置自动回正定时器
    */
   private onControlsChange(): void {
+    this.scheduleAutoCorrect()
+  }
+
+  /**
+   * 调度自动回正
+   */
+  private scheduleAutoCorrect(): void {
     if (this.state !== 'normal') return
 
     // 清除之前的定时器
@@ -119,9 +126,10 @@ export class InteractionManager {
       this.autoCorrectTimer = null
     }
 
-    // 检查是否有明显的旋转偏移（上下旋转，即 x 轴旋转）
+    // 检查是否有明显的旋转偏移（上下旋转，即 x 或 z 轴旋转）
     const rotX = this.earthGroup.rotation.x
-    if (Math.abs(rotX) > 0.05) {  // 超过约3度
+    const rotZ = this.earthGroup.rotation.z
+    if (Math.abs(rotX) > 0.05 || Math.abs(rotZ) > 0.05) {
       // 启动自动回正定时器
       this.autoCorrectTimer = window.setTimeout(() => {
         this.autoCorrectRotation()
@@ -155,6 +163,8 @@ export class InteractionManager {
     if (Math.sqrt(dx * dx + dy * dy) > this.clickThreshold) {
       this.hasDragged = true
     }
+    // 用户停止交互后，调度自动回正
+    this.scheduleAutoCorrect()
   }
 
   private onCanvasClick(event: MouseEvent): void {

@@ -55,10 +55,8 @@ export class GeoLayer {
   // 保存国家边界框
   private countryBounds: Map<string, CountryBounds> = new Map()
 
-  // 边界线高度偏移
-  private readonly LINE_OFFSET = 2.0
-  // 填充高度偏移（边界线略高于填充）
-  private readonly FILL_OFFSET = 0.5
+  // 边界线和填充高度偏移（都贴合球面）
+  private readonly OFFSET = 0.2
 
   constructor(config: GeoLayerConfig) {
     this.scene = config.scene
@@ -179,16 +177,16 @@ export class GeoLayer {
 
   private drawPolygon(coordinates: any, material: THREE.LineBasicMaterial, countryName: string): void {
     coordinates.forEach((ring: any, ringIndex: number) => {
-      // 收集外环点（用于边界线和填充）
+      // 收集外环点
       const ringPoints: THREE.Vector3[] = []
       ring.forEach((coord: any) => {
         if (coord && coord.length >= 2 && !isNaN(coord[0]) && !isNaN(coord[1])) {
-          ringPoints.push(this.latLonToVector3(coord[1], coord[0], this.radius))
+          ringPoints.push(this.latLonToVector3(coord[1], coord[0], this.radius + this.OFFSET))
         }
       })
 
       if (ringPoints.length >= 3) {
-        // 1. 绘制填充（使用外环点直接三角化）
+        // 1. 绘制填充（使用扇形三角剖分）
         if (ringIndex === 0) {
           const fillMesh = this.createFillPolygonFromRing(ringPoints)
           if (fillMesh) {
@@ -197,12 +195,8 @@ export class GeoLayer {
           }
         }
 
-        // 2. 绘制边界线（位于填充上方）
-        const linePoints = ringPoints.map(p => {
-          const dir = p.clone().normalize()
-          return p.clone().add(dir.multiplyScalar(this.LINE_OFFSET))
-        })
-        const closedLinePoints = [...linePoints, linePoints[0].clone()]
+        // 2. 绘制边界线（直接贴合球面）
+        const closedLinePoints = [...ringPoints, ringPoints[0].clone()]
         const geometry = new THREE.BufferGeometry().setFromPoints(closedLinePoints)
         const line = new THREE.Line(geometry, material)
         this.allLines.set(countryName + '_' + this.allLines.size, line)
@@ -212,64 +206,39 @@ export class GeoLayer {
   }
 
   /**
-   * 根据外环点创建填充多边形（直接贴合球面）
+   * 创建扇形填充多边形（简单扇形三角剖分）
    */
   private createFillPolygonFromRing(ringPoints: THREE.Vector3[]): THREE.Mesh | null {
     if (ringPoints.length < 3) return null
 
-    // 计算几何中心
+    // 计算质心
     const centroid = new THREE.Vector3()
     ringPoints.forEach(p => centroid.add(p))
     centroid.divideScalar(ringPoints.length)
 
-    // 计算局部坐标系
-    const normal = centroid.clone().normalize()
-    const up = new THREE.Vector3(0, 1, 0)
-    const tangent = new THREE.Vector3().crossVectors(up, normal).normalize()
-    const bitangent = new THREE.Vector3().crossVectors(normal, tangent).normalize()
+    // 简单的扇形三角剖分：从质心到每个顶点
+    const vertices: number[] = []
+    const indices: number[] = []
 
-    // 将球面点投影到 2D 切平面
-    const shapePoints: THREE.Vector2[] = ringPoints.map(p => {
-      const rel = p.clone().sub(centroid)
-      const x = rel.dot(tangent)
-      const y = rel.dot(bitangent)
-      return new THREE.Vector2(x, y)
+    // 质心点
+    vertices.push(centroid.x, centroid.y, centroid.z)
+
+    // 外环点
+    ringPoints.forEach(p => {
+      vertices.push(p.x, p.y, p.z)
     })
 
-    // 使用 ShapeGeometry 三角化
-    const shape = new THREE.Shape(shapePoints)
-    const geometry2D = new THREE.ShapeGeometry(shape)
-
-    // 获取顶点索引
-    const indices = geometry2D.index ? Array.from(geometry2D.index.array) : []
-    const vertices2D = geometry2D.attributes.position.array
-
-    // 将 2D 顶点映射回 3D 球面
-    const vertices3D: number[] = []
-    const radius = centroid.length()
-
-    for (let i = 0; i < vertices2D.length; i += 3) {
-      const x = vertices2D[i]
-      const y = vertices2D[i + 1]
-      // 从质心出发，偏移 (x, y)，投影到球面
-      const dir = centroid.clone()
-        .add(tangent.clone().multiplyScalar(x))
-        .add(bitangent.clone().multiplyScalar(y))
-        .normalize()
-        .multiplyScalar(radius + this.FILL_OFFSET)
-      vertices3D.push(dir.x, dir.y, dir.z)
+    // 创建扇形三角形
+    for (let i = 1; i <= ringPoints.length; i++) {
+      indices.push(0, i, i === ringPoints.length ? 1 : i + 1)
     }
 
-    // 创建 3D 几何体
-    const geometry3D = new THREE.BufferGeometry()
-    geometry3D.setAttribute('position', new THREE.Float32BufferAttribute(vertices3D, 3))
-    if (indices.length > 0) {
-      geometry3D.setIndex(indices)
-    }
-    geometry3D.computeVertexNormals()
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
+    geometry.setIndex(indices)
+    geometry.computeVertexNormals()
 
-    const mesh = new THREE.Mesh(geometry3D, this.fillMaterial.clone())
-    return mesh
+    return new THREE.Mesh(geometry, this.fillMaterial.clone())
   }
 
   /**
