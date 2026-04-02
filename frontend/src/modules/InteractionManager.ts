@@ -96,6 +96,20 @@ export class InteractionManager {
       canvas.addEventListener('mouseup', (e) => this.onMouseUp(e))
       canvas.addEventListener('click', (e) => this.onCanvasClick(e))
       canvas.addEventListener('contextmenu', (e) => this.onRightClick(e))
+      // 中键回到默认大小
+      canvas.addEventListener('auxclick', (e) => this.onMiddleClick(e))
+    }
+  }
+
+  /**
+   * 中键回到默认大小
+   */
+  private onMiddleClick(event: MouseEvent): void {
+    if (event.button === 1) {  // 中键
+      event.preventDefault()
+      if (this.state === 'focused') {
+        this.cancelFocus()
+      }
     }
   }
 
@@ -147,9 +161,61 @@ export class InteractionManager {
 
   /**
    * 聚焦到某区域
-   * 1. 粒子散开消失
-   * 2. 相机飞向目标
-   * 3. 粒子聚拢回来
+   * 使用点击点的法线方向计算相机位置
+   */
+  public focusToPoint(point: THREE.Vector3, config: FlyToConfig): void {
+    if (this.state === 'focused') return
+    this.state = 'focused'
+
+    // 1. 记录当前 earthGroup 状态
+    this.originalGroupRotation.copy(this.earthGroup.rotation)
+    this.originalGroupScale = this.earthGroup.scale.x
+
+    // 2. 计算聚焦距离
+    const distance = this.calculateFocusDistance(config.lat, config.lng)
+
+    // 3. 使用点击点的法线方向计算相机位置
+    // point 已经是在 earthGroup 空间中的点，直接使用其方向
+    const direction = point.clone().normalize()
+
+    // 相机位置：沿法线方向 * distance
+    const cameraPos = direction.clone().multiplyScalar(distance)
+
+    // target 指向地球表面点
+    const targetPos = direction.clone().multiplyScalar(100)
+
+    this.controls.enabled = false
+
+    const tl = gsap.timeline({
+      onComplete: () => {
+        this.controls.enabled = true
+      }
+    })
+
+    // 相机飞向目标 - 先慢后快
+    tl.to(this.camera.position, {
+      x: cameraPos.x,
+      y: cameraPos.y,
+      z: cameraPos.z,
+      duration: config.duration ?? 1.5,
+      ease: 'power2.in'
+    }, 0)
+
+    // target 指向目标点
+    tl.to(this.controls.target, {
+      x: targetPos.x,
+      y: targetPos.y,
+      z: targetPos.z,
+      duration: config.duration ?? 1.5,
+      ease: 'power2.in',
+      onUpdate: () => {
+        this.camera.lookAt(this.controls.target)
+      }
+    }, 0)
+  }
+
+  /**
+   * 聚焦到某区域（使用经纬度）
    */
   public focusTo(config: FlyToConfig): void {
     if (this.state === 'focused') return
@@ -159,48 +225,32 @@ export class InteractionManager {
     this.originalGroupRotation.copy(this.earthGroup.rotation)
     this.originalGroupScale = this.earthGroup.scale.x
 
-    // 2. 粒子散开消失 (暂时取消)
-    // if (this.particleEarth) {
-    //   this.particleEarth.setScatter(1.0, 0.4)
-    // }
-
-    // 3. 计算合适的相机距离
+    // 2. 计算聚焦距离
     const distance = this.calculateFocusDistance(config.lat, config.lng)
 
-    // 4. 计算目标点位置和相机位置
-    const targetPoint = this.latLngToVector3(config.lat, config.lng, 100)
-    const targetPos = this.latLngToVector3(config.lat, config.lng, distance)
+    // 3. 使用点击点的法线方向
+    const direction = this.latLngToVector3(config.lat, config.lng, 1).normalize()
+    const cameraPos = direction.clone().multiplyScalar(distance)
+    const surfacePoint = direction.clone().multiplyScalar(100)
 
     this.controls.enabled = false
 
     const tl = gsap.timeline({
       onComplete: () => {
         this.controls.enabled = true
-        // 4. 聚拢回来 (暂时取消)
-        // if (this.particleEarth) {
-        //   this.particleEarth.setScatter(0.0, 0.4)
-        // }
       }
     })
 
     // 相机飞向目标 - 先慢后快
     tl.to(this.camera.position, {
-      x: targetPos.x,
-      y: targetPos.y,
-      z: targetPos.z,
-      duration: config.duration ?? 1.5,
-      ease: 'power2.in'
-    }, 0)
-
-    // target 指向目标点
-    tl.to(this.controls.target, {
-      x: targetPoint.x,
-      y: targetPoint.y,
-      z: targetPoint.z,
+      x: cameraPos.x,
+      y: cameraPos.y,
+      z: cameraPos.z,
       duration: config.duration ?? 1.5,
       ease: 'power2.in',
       onUpdate: () => {
-        this.camera.lookAt(this.controls.target)
+        // 持续更新相机朝向，指向目标点
+        this.camera.lookAt(surfacePoint)
       }
     }, 0)
   }
@@ -242,17 +292,9 @@ export class InteractionManager {
       y: 0,
       z: 400,
       duration,
-      ease: 'power2.out'
-    })
-
-    gsap.to(this.controls.target, {
-      x: 0,
-      y: 0,
-      z: 0,
-      duration,
       ease: 'power2.out',
       onUpdate: () => {
-        this.camera.lookAt(this.controls.target)
+        this.camera.lookAt(0, 0, 0)
       },
       onComplete: () => {
         this.controls.enabled = true

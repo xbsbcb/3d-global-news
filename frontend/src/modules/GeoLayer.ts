@@ -213,7 +213,7 @@ export class GeoLayer {
   }
 
   /**
-   * 创建填充多边形（使用 ShapeGeometry 三角化）
+   * 创建填充多边形（贴合球面的三角剖分）
    */
   private createFillPolygon(points: THREE.Vector3[]): THREE.Mesh | null {
     if (points.length < 3) return null
@@ -239,17 +239,39 @@ export class GeoLayer {
       return new THREE.Vector2(x, y)
     })
 
-    // 创建 Shape 并三角化
+    // 使用 ShapeGeometry 进行三角化
     const shape = new THREE.Shape(shapePoints)
-    const geometry = new THREE.ShapeGeometry(shape)
+    const geometry2D = new THREE.ShapeGeometry(shape)
 
-    // 创建网格
-    const mesh = new THREE.Mesh(geometry, this.fillMaterial.clone())
+    // 获取三角化后的顶点索引
+    const indices = geometry2D.index ? Array.from(geometry2D.index.array) : []
+    const vertices2D = geometry2D.attributes.position.array
 
-    // 将网格放置到正确位置和方向
-    mesh.position.copy(centroid)
-    mesh.lookAt(centroid.clone().add(normal))
+    // 创建贴合球面的 3D 顶点
+    const vertices3D: number[] = []
+    const meshCentroid = centroid.clone().normalize().multiplyScalar(this.radius + this.FILL_OFFSET)
 
+    for (let i = 0; i < vertices2D.length; i += 3) {
+      const x = vertices2D[i]
+      const y = vertices2D[i + 1]
+      // 计算 2D 点对应的 3D 球面点
+      // 从质心出发，在切平面上偏移 (x, y)，然后投影到球面
+      const dir = meshCentroid.clone()
+        .add(tangent.clone().multiplyScalar(x))
+        .add(bitangent.clone().multiplyScalar(y))
+        .normalize()
+        .multiplyScalar(this.radius + this.FILL_OFFSET)
+      vertices3D.push(dir.x, dir.y, dir.z)
+    }
+
+    // 创建 3D 几何体
+    const geometry3D = new THREE.BufferGeometry()
+    geometry3D.setAttribute('position', new THREE.Float32BufferAttribute(vertices3D, 3))
+    if (indices.length > 0) {
+      geometry3D.setIndex(indices)
+    }
+
+    const mesh = new THREE.Mesh(geometry3D, this.fillMaterial.clone())
     return mesh
   }
 

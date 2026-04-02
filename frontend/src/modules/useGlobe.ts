@@ -86,6 +86,12 @@ export function useGlobe(options: UseGlobeOptions) {
       // 更新相机距离用于散射计算
       particleEarth.setCameraDistance(earthScene.camera.position.length())
     }
+
+    // 普通状态缓慢自转
+    if (earthScene && interactionManager && interactionManager.getState() === 'normal') {
+      earthScene.earthGroup.rotation.y += 0.0005  // 缓慢自转
+    }
+
     if (earthScene) {
       earthScene.render()
     }
