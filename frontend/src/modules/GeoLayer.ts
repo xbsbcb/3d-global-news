@@ -44,18 +44,21 @@ export class GeoLayer {
 
   // 普通国家边界材质
   private countryMaterial: THREE.LineBasicMaterial
-  // 填充材质 - 外表面显示
-  private fillMaterial: THREE.MeshBasicMaterial
 
   // 保存所有边界线
   private allLines: Map<string, THREE.Line> = new Map()
-  // 保存所有填充
-  private allFills: Map<string, THREE.Mesh> = new Map()
+
+  // 国家填充粒子
+  private countryFillPoints: THREE.Points | null = null
+  private countryFillMaterial: THREE.ShaderMaterial | null = null
 
   // 保存国家边界框
   private countryBounds: Map<string, CountryBounds> = new Map()
 
-  // 边界线和填充高度偏移（都贴合球面）
+  // 保存所有国家的外环点（用于粒子填充）
+  private countryPolygons: Map<string, number[][][]> = new Map()
+
+  // 边界线高度偏移
   private readonly OFFSET = 0.2
 
   constructor(config: GeoLayerConfig) {
@@ -66,14 +69,6 @@ export class GeoLayer {
       color: 0x00aaff,
       transparent: true,
       opacity: 0.4
-    })
-
-    // 填充材质 - 使用 FrontSide 只显示外表面
-    this.fillMaterial = new THREE.MeshBasicMaterial({
-      color: 0x2266aa,
-      transparent: true,
-      opacity: 0.3,
-      side: THREE.FrontSide
     })
 
     this.group = new THREE.Group()
@@ -107,6 +102,7 @@ export class GeoLayer {
       this.geoData = data
       this.calculateBounds()
       this.drawBoundaries()
+      this.createCountryFillParticles()
       console.log('GeoLayer: 加载了', data.features.length, '个国家边界')
     } catch (error) {
       console.warn('GeoJSON 加载失败:', error)
@@ -114,7 +110,7 @@ export class GeoLayer {
   }
 
   /**
-   * 计算每个国家的边界框
+   * 计算每个国家的边界框，并存储多边形
    */
   private calculateBounds(): void {
     if (!this.geoData) return
@@ -125,6 +121,10 @@ export class GeoLayer {
 
       const geom = feature.geometry as any
       const polygons = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates
+
+      // 存储外环多边形（用于粒子填充）
+      const outerRing = polygons[0][0]  // 外环
+      this.countryPolygons.set(name, outerRing)
 
       let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180
 
@@ -176,7 +176,7 @@ export class GeoLayer {
   }
 
   private drawPolygon(coordinates: any, material: THREE.LineBasicMaterial, countryName: string): void {
-    coordinates.forEach((ring: any, ringIndex: number) => {
+    coordinates.forEach((ring: any, _ringIndex: number) => {
       // 收集外环点
       const ringPoints: THREE.Vector3[] = []
       ring.forEach((coord: any) => {
@@ -186,16 +186,7 @@ export class GeoLayer {
       })
 
       if (ringPoints.length >= 3) {
-        // 1. 绘制填充（使用扇形三角剖分）
-        if (ringIndex === 0) {
-          const fillMesh = this.createFillPolygonFromRing(ringPoints)
-          if (fillMesh) {
-            this.allFills.set(countryName + '_fill_' + this.allFills.size, fillMesh)
-            this.group.add(fillMesh)
-          }
-        }
-
-        // 2. 绘制边界线（直接贴合球面）
+        // 绘制边界线（直接贴合球面）
         const closedLinePoints = [...ringPoints, ringPoints[0].clone()]
         const geometry = new THREE.BufferGeometry().setFromPoints(closedLinePoints)
         const line = new THREE.Line(geometry, material)
@@ -206,39 +197,88 @@ export class GeoLayer {
   }
 
   /**
-   * 创建扇形填充多边形（简单扇形三角剖分）
+   * 创建国家填充粒子（差异化的稀疏、明暗、大小）
    */
-  private createFillPolygonFromRing(ringPoints: THREE.Vector3[]): THREE.Mesh | null {
-    if (ringPoints.length < 3) return null
+  private createCountryFillParticles(): void {
+    const particleCount = 30000  // 比主例子层稀疏
+    const positions = new Float32Array(particleCount * 3)
+    const colors = new Float32Array(particleCount * 3)
+    const sizes = new Float32Array(particleCount)
 
-    // 计算质心
-    const centroid = new THREE.Vector3()
-    ringPoints.forEach(p => centroid.add(p))
-    centroid.divideScalar(ringPoints.length)
+    let index = 0
+    const countries = Array.from(this.countryPolygons.entries())
 
-    // 简单的扇形三角剖分：从质心到每个顶点
-    const vertices: number[] = []
-    const indices: number[] = []
+    while (index < particleCount && countries.length > 0) {
+      // 随机选择一个国家
+      const [countryName, polygon] = countries[Math.floor(Math.random() * countries.length)]
 
-    // 质心点
-    vertices.push(centroid.x, centroid.y, centroid.z)
+      // 在该国家的边界框内生成随机点
+      const bounds = this.countryBounds.get(countryName)
+      if (!bounds) continue
 
-    // 外环点
-    ringPoints.forEach(p => {
-      vertices.push(p.x, p.y, p.z)
-    })
+      const lat = bounds.minLat + Math.random() * (bounds.maxLat - bounds.minLat)
+      const lng = bounds.minLng + Math.random() * (bounds.maxLng - bounds.minLng)
 
-    // 创建扇形三角形
-    for (let i = 1; i <= ringPoints.length; i++) {
-      indices.push(0, i, i === ringPoints.length ? 1 : i + 1)
+      // 检查点是否在多边形内
+      if (this.pointInPolygon(lat, lng, polygon as unknown as number[][])) {
+        const pos = this.latLonToVector3(lat, lng, this.radius)
+        positions[index * 3] = pos.x
+        positions[index * 3 + 1] = pos.y
+        positions[index * 3 + 2] = pos.z
+
+        // 差异化颜色（明暗变化）
+        const brightness = 0.4 + Math.random() * 0.3  // 0.4-0.7 的亮度
+        colors[index * 3] = brightness * 0.2     // R - 蓝色调
+        colors[index * 3 + 1] = brightness * 0.4  // G
+        colors[index * 3 + 2] = brightness * 0.8  // B
+
+        // 差异化大小（3-6像素）
+        sizes[index] = 3 + Math.random() * 3
+
+        index++
+      }
     }
 
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
-    geometry.setIndex(indices)
-    geometry.computeVertexNormals()
+    // 创建着色器材质
+    this.countryFillMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uPixelRatio: { value: window.devicePixelRatio }
+      },
+      vertexShader: `
+        attribute float size;
+        attribute vec3 customColor;
+        varying vec3 vColor;
 
-    return new THREE.Mesh(geometry, this.fillMaterial.clone())
+        void main() {
+          vColor = customColor;
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = size * uPixelRatio;
+          gl_Position = projectionMatrix * mvPosition;
+        }
+      `,
+      fragmentShader: `
+        uniform float uPixelRatio;
+        varying vec3 vColor;
+
+        void main() {
+          vec2 center = gl_PointCoord - vec2(0.5);
+          float r = length(center) * 2.0;
+          if (r > 1.0) discard;
+          float alpha = smoothstep(1.0, 0.5, r) * 0.6;
+          gl_FragColor = vec4(vColor, alpha);
+        }
+      `,
+      transparent: true,
+      vertexColors: true
+    })
+
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    geometry.setAttribute('customColor', new THREE.BufferAttribute(colors, 3))
+    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1))
+
+    this.countryFillPoints = new THREE.Points(geometry, this.countryFillMaterial)
+    this.group.add(this.countryFillPoints)
   }
 
   /**
@@ -318,13 +358,14 @@ export class GeoLayer {
     })
     this.allLines.clear()
 
-    this.allFills.forEach((mesh) => {
-      mesh.geometry.dispose()
-      ;(mesh.material as THREE.MeshBasicMaterial).dispose()
-    })
-    this.allFills.clear()
+    if (this.countryFillPoints) {
+      this.countryFillPoints.geometry.dispose()
+      this.countryFillMaterial?.dispose()
+      this.countryFillPoints = null
+    }
 
     this.countryBounds.clear()
+    this.countryPolygons.clear()
     this.scene.remove(this.group)
   }
 }

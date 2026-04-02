@@ -65,6 +65,7 @@ export class InteractionManager {
   private autoCorrectTimer: number | null = null
   private readonly AUTO_CORRECT_DELAY = 2000  // 2秒后自动回正
   private readonly AUTO_CORRECT_DURATION = 0.5  // 回正动画时长
+  private readonly TILT_THRESHOLD = 0.15  // 约8.5度阈值
 
   constructor(
     camera: THREE.PerspectiveCamera,
@@ -126,10 +127,14 @@ export class InteractionManager {
       this.autoCorrectTimer = null
     }
 
-    // 检查是否有明显的旋转偏移（上下旋转，即 x 或 z 轴旋转）
-    const rotX = this.earthGroup.rotation.x
-    const rotZ = this.earthGroup.rotation.z
-    if (Math.abs(rotX) > 0.05 || Math.abs(rotZ) > 0.05) {
+    // 通过 camera.position.y 检测上下倾斜程度
+    // 相机距离为 length()，y 方向偏移反映倾斜
+    const cameraPos = this.camera.position
+    const cameraRadius = cameraPos.length()
+    const normalizedY = Math.abs(cameraPos.y / cameraRadius)
+
+    // 如果相机倾斜超过阈值（normalizedY > sin(threshold)）
+    if (normalizedY > Math.sin(this.TILT_THRESHOLD)) {
       // 启动自动回正定时器
       this.autoCorrectTimer = window.setTimeout(() => {
         this.autoCorrectRotation()
@@ -138,17 +143,31 @@ export class InteractionManager {
   }
 
   /**
-   * 自动回正旋转
+   * 自动回正旋转 - 使用 OrbitControls 的 spherical
    */
   private autoCorrectRotation(): void {
     if (this.state !== 'normal') return
-    if (gsap.isTweening(this.earthGroup.rotation)) return
+    if (!this.controls.enabled) return
 
-    gsap.to(this.earthGroup.rotation, {
-      x: 0,
-      z: 0,
+    // 获取当前的 spherical phi (OrbitControls 内部有 spherical 属性)
+    const controlsAny = this.controls as any
+    const currentPhi = controlsAny.spherical?.phi ?? (Math.PI / 2)
+
+    // 只有当 phi 偏离赤道位置时才回正
+    const phiDiff = Math.abs(currentPhi - Math.PI / 2)
+    if (phiDiff < this.TILT_THRESHOLD) return
+
+    // 记录目标 phi（赤道位置）
+    const targetPhi = Math.PI / 2
+
+    // 使用球面插值回正
+    gsap.to(controlsAny.spherical, {
+      phi: targetPhi,
       duration: this.AUTO_CORRECT_DURATION,
-      ease: 'power2.out'
+      ease: 'power2.out',
+      onUpdate: () => {
+        this.controls.update()
+      }
     })
   }
 
