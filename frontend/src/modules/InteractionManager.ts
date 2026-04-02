@@ -63,9 +63,12 @@ export class InteractionManager {
 
   // 自动回正定时器
   private autoCorrectTimer: number | null = null
-  private readonly AUTO_CORRECT_DELAY = 2000  // 2秒后自动回正
+  private readonly AUTO_CORRECT_DELAY = 1000  // 1秒后自动回正
   private readonly AUTO_CORRECT_DURATION = 0.5  // 回正动画时长
   private readonly TILT_THRESHOLD = 0.15  // 约8.5度阈值
+
+  // 是否允许自动旋转（在聚焦/取消聚焦动画期间禁止）
+  private autoRotateEnabled = true
 
   constructor(
     camera: THREE.PerspectiveCamera,
@@ -282,7 +285,15 @@ export class InteractionManager {
    */
   public focusTo(config: FlyToConfig): void {
     if (this.state === 'focused') return
+
+    // 检查是否在海洋（没有国家），海洋禁止聚焦
+    if (this.geoLayer) {
+      const countryName = this.geoLayer.findCountryAtPoint(config.lat, config.lng)
+      if (!countryName) return  // 海洋禁止聚焦
+    }
+
     this.state = 'focused'
+    this.autoRotateEnabled = false  // 禁止自动旋转
 
     // 1. 记录当前 earthGroup 状态
     this.originalGroupRotation.copy(this.earthGroup.rotation)
@@ -324,6 +335,7 @@ export class InteractionManager {
   public cancelFocus(): void {
     if (this.state === 'normal') return
     this.state = 'normal'
+    this.autoRotateEnabled = false  // 禁止自动旋转直到动画完成
 
     const duration = 0.8
 
@@ -361,6 +373,7 @@ export class InteractionManager {
       },
       onComplete: () => {
         this.controls.enabled = true
+        this.autoRotateEnabled = true  // 动画完成后恢复自动旋转
         // 4. 粒子聚拢回来 (暂时取消)
         // if (this.particleEarth) {
         //   this.particleEarth.setScatter(0.0, 0.4)
@@ -460,6 +473,10 @@ export class InteractionManager {
 
   public getState(): FocusStateType {
     return this.state
+  }
+
+  public isAutoRotateEnabled(): boolean {
+    return this.autoRotateEnabled
   }
 
   public dispose(): void {

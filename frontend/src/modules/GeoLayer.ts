@@ -197,10 +197,10 @@ export class GeoLayer {
   }
 
   /**
-   * 创建国家填充粒子（大而稀疏，与海洋区分）
+   * 创建国家填充粒子（更明显：多数量、高亮度、加法混合）
    */
   private createCountryFillParticles(): void {
-    const particleCount = 15000  // 比主粒子层稀疏
+    const particleCount = 30000  // 增加粒子数量
     const positions = new Float32Array(particleCount * 3)
     const colors = new Float32Array(particleCount * 3)
     const sizes = new Float32Array(particleCount)
@@ -226,20 +226,20 @@ export class GeoLayer {
         positions[index * 3 + 1] = pos.y
         positions[index * 3 + 2] = pos.z
 
-        // 差异化颜色（明暗变化）- 国家填充稍亮
-        const brightness = 0.5 + Math.random() * 0.3  // 0.5-0.8 的亮度
-        colors[index * 3] = brightness * 0.3     // R - 蓝色调
-        colors[index * 3 + 1] = brightness * 0.5  // G
-        colors[index * 3 + 2] = brightness * 0.9  // B
+        // 高亮度白色/青白色 - 国家明显区别于海洋
+        const brightness = 0.7 + Math.random() * 0.3  // 0.7-1.0 高亮度
+        colors[index * 3] = brightness * 0.8     // R
+        colors[index * 3 + 1] = brightness * 0.9  // G
+        colors[index * 3 + 2] = brightness       // B (全亮度)
 
-        // 大而稀疏（8-20像素）
-        sizes[index] = 8 + Math.random() * 12
+        // 中等大小（6-14像素）
+        sizes[index] = 6 + Math.random() * 8
 
         index++
       }
     }
 
-    // 创建着色器材质
+    // 创建着色器材质 - 使用加法混合更亮
     this.countryFillMaterial = new THREE.ShaderMaterial({
       uniforms: {
         uPixelRatio: { value: window.devicePixelRatio }
@@ -264,12 +264,14 @@ export class GeoLayer {
           vec2 center = gl_PointCoord - vec2(0.5);
           float r = length(center) * 2.0;
           if (r > 1.0) discard;
-          float alpha = smoothstep(1.0, 0.3, r) * 0.7;
+          float alpha = smoothstep(1.0, 0.2, r) * 0.8;
           gl_FragColor = vec4(vColor, alpha);
         }
       `,
       transparent: true,
-      vertexColors: true
+      blending: THREE.AdditiveBlending,
+      vertexColors: true,
+      depthTest: false
     })
 
     const geometry = new THREE.BufferGeometry()

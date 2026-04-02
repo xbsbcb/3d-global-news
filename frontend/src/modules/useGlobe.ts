@@ -87,8 +87,10 @@ export function useGlobe(options: UseGlobeOptions) {
       particleEarth.setCameraDistance(earthScene.camera.position.length())
     }
 
-    // 普通状态缓慢自转
-    if (earthScene && interactionManager && interactionManager.getState() === 'normal') {
+    // 普通状态缓慢自转（仅在允许时）
+    if (earthScene && interactionManager &&
+        interactionManager.getState() === 'normal' &&
+        interactionManager.isAutoRotateEnabled()) {
       earthScene.earthGroup.rotation.y += 0.0005  // 缓慢自转
     }
 
