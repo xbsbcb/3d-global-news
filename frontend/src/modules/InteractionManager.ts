@@ -168,18 +168,39 @@ export class InteractionManager {
 
     const intersects = this.raycaster.intersectObject(this.earthGroup, true)
     if (intersects.length > 0) {
-      const point = intersects[0].point
-      const latLng = this.vector3ToLatLng(point)
+      const worldPoint = intersects[0].point.clone()
+      let localPoint = worldPoint.clone()
 
-      // 点击国家地区，显示高亮粒子
+      // 逆旋转（只有 Y 轴自转）
+      // 逆旋转矩阵（绕 Y 轴旋转 -θ）:
+      // [cos(θ)  0  -sin(θ)] [x]
+      // [0        1   0     ] [y]
+      // [sin(θ)  0   cos(θ)] [z]
+      if (Math.abs(this.earthGroup.rotation.y) > 0.001) {
+        const theta = this.earthGroup.rotation.y
+        const cos = Math.cos(theta)
+        const sin = Math.sin(theta)
+        localPoint = new THREE.Vector3(
+          worldPoint.x * cos - worldPoint.z * sin,
+          worldPoint.y,
+          worldPoint.x * sin + worldPoint.z * cos
+        )
+      }
+
+      const latLng = this.vector3ToLatLng(localPoint)
+
+      // 调试日志
+      console.log('Click:', {
+        world: { x: worldPoint.x.toFixed(1), y: worldPoint.y.toFixed(1), z: worldPoint.z.toFixed(1) },
+        local: { x: localPoint.x.toFixed(1), y: localPoint.y.toFixed(1), z: localPoint.z.toFixed(1) },
+        rotation: { y: (this.earthGroup.rotation.y * 180 / Math.PI).toFixed(1) },
+        latLng
+      })
+
+      // 点击国家，显示高亮（直接调用 GeoLayer 的 onGlobeClick）
       if (this.geoLayer) {
-        const countryName = this.geoLayer.findCountryAtPoint(latLng.lat, latLng.lng)
-        if (countryName) {
-          this.geoLayer.highlightCountry(countryName)
-        } else {
-          // 点击海洋，清除高亮
-          this.geoLayer.clearHighlight()
-        }
+        const countryName = this.geoLayer.onGlobeClick(worldPoint)
+        console.log('Selected Country:', countryName)
       }
     }
   }
@@ -191,22 +212,13 @@ export class InteractionManager {
     const radius = point.length()
     const lat = 90 - Math.acos(point.y / radius) * (180 / Math.PI)
 
-    // atan2(z, -x) 的范围是 [-PI, PI]
-    // 但 theta = (lng + 180) * PI / 180 的范围是 [0, 2PI]
-    // 需要根据 x 的符号调整
-    let theta = Math.atan2(point.z, -point.x)
-
-    // 如果 x < 0，theta 需要加 PI（因为 -cos 在 x<0 时与 cos 相差 PI）
-    if (point.x < 0) {
-      theta = Math.PI - theta
-    } else {
-      theta = -theta
-    }
-
-    // 转换到 [0, 2PI]
+    // atan2(z, x) 反算经度
+    let theta = Math.atan2(point.z, point.x)
+    // theta 范围 [-PI, PI]，转换到 [0, 2PI]
     if (theta < 0) theta += 2 * Math.PI
-
-    const lng = theta * (180 / Math.PI) - 180
+    // 再转换到 [-180, 180]
+    let lng = theta * (180 / Math.PI) - 180
+    if (lng > 180) lng -= 360
 
     return { lat, lng }
   }

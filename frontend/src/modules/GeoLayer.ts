@@ -1,9 +1,3 @@
-/**
- * GeoLayer - 地理边界模块
- * 负责解析 GeoJSON，生成国家边界线
- * 支持点击国家高亮显示
- */
-
 import * as THREE from 'three'
 
 export interface GeoLayerConfig {
@@ -13,71 +7,55 @@ export interface GeoLayerConfig {
 
 interface GeoFeature {
   type: string
-  properties: {
-    ADMIN?: string
-    name?: string
-    ISO_A3?: string
-  }
+  properties: any
   geometry: {
-    type: string
-    coordinates: number[][][] | number[][][][]
+    type: 'Polygon' | 'MultiPolygon'
+    coordinates: any[]
   }
 }
 
-export interface GeoData {
-  type: string
-  features: GeoFeature[]
-}
-
-export interface CountryBounds {
-  minLat: number
-  maxLat: number
-  minLng: number
-  maxLng: number
+interface CountryBounds {
+  minLat: number; maxLat: number; minLng: number; maxLng: number;
+  isCrossAntimeridian: boolean; // 是否跨越180度经线
 }
 
 export class GeoLayer {
   private scene: THREE.Object3D
   private radius: number
   private group: THREE.Group
-  private geoData: GeoData | null = null
 
-  // 普通国家边界材质
   private countryMaterial: THREE.LineBasicMaterial
+  private highlightMaterial: THREE.LineBasicMaterial
 
-  // 保存所有边界线
-  private allLines: Map<string, THREE.Line> = new Map()
+  private countryData: Map<string, {
+    bounds: CountryBounds,
+    polygons: number[][][] // 简化为 [环][坐标点]
+  }> = new Map()
 
-  // 保存国家边界框
-  private countryBounds: Map<string, CountryBounds> = new Map()
-
-  // 保存每个国家的多边形环（用于检测）
-  private countryPolygons: Map<string, number[][][]> = new Map()
-
-  // 高亮相关
   private highlightedCountry: string | null = null
-  private highlightColor = new THREE.Color(0xff6600)  // 橙色高亮
-  private normalColor = new THREE.Color(0x00aaff)    // 普通蓝色
-
-  // 边界线高度偏移
-  private readonly OFFSET = 0.2
+  private readonly OFFSET = 0.5 // 边界线略高于球面
 
   constructor(config: GeoLayerConfig) {
     this.scene = config.scene
     this.radius = config.radius
 
+    this.group = new THREE.Group()
+    this.scene.add(this.group)
+
     this.countryMaterial = new THREE.LineBasicMaterial({
       color: 0x00aaff,
       transparent: true,
-      opacity: 0.4
+      opacity: 0.5
     })
 
-    this.group = new THREE.Group()
-    this.scene.add(this.group)
+    this.highlightMaterial = new THREE.LineBasicMaterial({
+      color: 0xffcc00,
+      linewidth: 2
+    })
   }
 
   /**
-   * 经纬度转 3D 坐标
+   * 核心：经纬度转 3D (保持你原来的投影逻辑)
    */
   public latLonToVector3(lat: number, lon: number, r?: number): THREE.Vector3 {
     const radius = r ?? this.radius
@@ -92,257 +70,161 @@ export class GeoLayer {
   }
 
   /**
-   * 加载 GeoJSON 数据
+   * 核心：3D 向量转经纬度 (适配自转与偏移)
    */
-  public async load(): Promise<void> {
-    const countryUrl = 'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson'
+  public vector3ToLatLon(v: THREE.Vector3): [number, number] {
+    // 1. 将世界坐标转为本地坐标，抵消 group 的旋转影响
+    const localV = this.group.worldToLocal(v.clone()).normalize()
 
+    // 2. 反算纬度: y = cos(phi)
+    const phi = Math.acos(localV.y)
+    const lat = 90 - (phi * 180 / Math.PI)
+
+    // 3. 反算经度: x = -sin(phi)cos(theta), z = sin(phi)sin(theta)
+    // 根据 atan2(z, -x) 得到 theta
+    let theta = Math.atan2(localV.z, -localV.x)
+    let lon = (theta * 180 / Math.PI) - 180
+
+    // 4. 标准化经度范围 [-180, 180]
+    while (lon <= -180) lon += 360
+    while (lon > 180) lon -= 360
+
+    return [lat, lon]
+  }
+
+  public async load(): Promise<void> {
+    const url = 'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson'
     try {
-      const response = await fetch(countryUrl)
-      const data: GeoData = await response.json()
-      this.geoData = data
-      this.parseCountryData()
-      this.drawBoundaries()
-      console.log('GeoLayer: 加载了', data.features.length, '个国家边界')
-    } catch (error) {
-      console.warn('GeoJSON 加载失败:', error)
+      const res = await fetch(url)
+      const data = await res.json()
+      this.parseAndDraw(data.features)
+    } catch (e) {
+      console.error('GeoData Load Failed', e)
     }
   }
 
-  /**
-   * 解析国家数据
-   */
-  private parseCountryData(): void {
-    if (!this.geoData) return
+  private parseAndDraw(features: GeoFeature[]) {
+    features.forEach(feature => {
+      const name = feature.properties?.ADMIN || feature.properties?.name || 'Unknown'
+      const coords = feature.geometry.coordinates
+      const type = feature.geometry.type
 
-    for (const feature of this.geoData.features) {
-      const name = feature.properties?.ADMIN || feature.properties?.name
-      if (!name) continue
-
-      const geom = feature.geometry as any
-      const polygons: number[][][][] = geom.type === 'Polygon'
-        ? [geom.coordinates]
-        : geom.coordinates
-
-      // 收集所有环
+      const polygons = type === 'Polygon' ? [coords] : coords
       const allRings: number[][][] = []
+
       let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180
 
-      for (const polygon of polygons) {
-        for (const ring of polygon) {
-          allRings.push(ring)
-          for (const coord of ring) {
-            const lng = coord[0]
-            const lat = coord[1]
-            if (!isNaN(lat) && !isNaN(lng)) {
-              minLat = Math.min(minLat, lat)
-              maxLat = Math.max(maxLat, lat)
-              minLng = Math.min(minLng, lng)
-              maxLng = Math.max(maxLng, lng)
-            }
-          }
-        }
-      }
+      polygons.forEach((poly: any) => {
+        // poly[0] 是外环
+        const externalRing = poly[0]
+        allRings.push(externalRing)
 
-      this.countryBounds.set(name, { minLat, maxLat, minLng, maxLng })
-      this.countryPolygons.set(name, allRings)
-    }
-  }
-
-  /**
-   * 获取国家的边界框
-   */
-  public getCountryBounds(countryName: string): CountryBounds | null {
-    return this.countryBounds.get(countryName) || null
-  }
-
-  /**
-   * 绘制所有边界线
-   */
-  private drawBoundaries(): void {
-    if (!this.geoData) return
-
-    this.geoData.features.forEach((feature: GeoFeature) => {
-      const geom = feature.geometry as any
-      const name = feature.properties?.ADMIN || feature.properties?.name || 'Unknown'
-
-      const lineMaterial = this.countryMaterial.clone()
-
-      if (geom.type === 'Polygon') {
-        this.drawPolygon(geom.coordinates, lineMaterial, name)
-      } else if (geom.type === 'MultiPolygon') {
-        geom.coordinates.forEach((polygon: any) => {
-          this.drawPolygon(polygon, lineMaterial, name)
+        externalRing.forEach((pt: any) => {
+          const [lng, lat] = pt
+          minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat)
+          minLng = Math.min(minLng, lng); maxLng = Math.max(maxLng, lng)
         })
-      }
+
+        // 绘制边界
+        const points = externalRing.map((pt: any) => this.latLonToVector3(pt[1], pt[0], this.radius + this.OFFSET))
+        const geometry = new THREE.BufferGeometry().setFromPoints(points)
+        const line = new THREE.Line(geometry, this.countryMaterial.clone())
+
+        // 将国家名称存入 userData 方便后续遍历
+        line.userData = { country: name }
+        this.group.add(line)
+      })
+
+      this.countryData.set(name, {
+        bounds: {
+          minLat, maxLat, minLng, maxLng,
+          isCrossAntimeridian: (maxLng - minLng > 180)
+        },
+        polygons: allRings
+      })
     })
   }
 
   /**
-   * 绘制多边形边界线
+   * 点击检测触发
+   * @param worldPoint Raycaster 碰撞得到的交点 (Vector3)
    */
-  private drawPolygon(coordinates: number[][][], material: THREE.LineBasicMaterial, countryName: string): void {
-    for (const ring of coordinates) {
-      const ringPoints: THREE.Vector3[] = []
-      for (const coord of ring) {
-        if (coord && coord.length >= 2 && !isNaN(coord[0]) && !isNaN(coord[1])) {
-          ringPoints.push(this.latLonToVector3(coord[1], coord[0], this.radius + this.OFFSET))
+  public onGlobeClick(worldPoint: THREE.Vector3): string | null {
+    const [lat, lon] = this.vector3ToLatLon(worldPoint)
+
+    let foundCountry: string | null = null
+
+    for (const [name, data] of this.countryData.entries()) {
+      const { bounds, polygons } = data
+
+      // 1. 粗筛 (Bounding Box)
+      const inLat = lat >= bounds.minLat && lat <= bounds.maxLat
+      let inLng = false
+      if (bounds.isCrossAntimeridian) {
+        inLng = lon >= bounds.minLng || lon <= bounds.maxLng
+      } else {
+        inLng = lon >= bounds.minLng && lon <= bounds.maxLng
+      }
+
+      if (inLat && inLng) {
+        // 2. 精筛 (Point-in-Polygon)
+        for (const ring of polygons) {
+          if (this.isPointInPoly(lon, lat, ring)) {
+            foundCountry = name
+            break
+          }
         }
       }
-
-      if (ringPoints.length >= 3) {
-        const closedLinePoints = [...ringPoints, ringPoints[0].clone()]
-        const geometry = new THREE.BufferGeometry().setFromPoints(closedLinePoints)
-        const line = new THREE.Line(geometry, material)
-        this.allLines.set(countryName + '_' + this.allLines.size, line)
-        this.group.add(line)
-      }
+      if (foundCountry) break
     }
+
+    if (foundCountry) {
+      this.highlightCountry(foundCountry)
+    } else {
+      this.clearHighlight()
+    }
+
+    return foundCountry
   }
 
-  /**
-   * 点是否在多边形内 - ray casting
-   * @param lng 经度
-   * @param lat 纬度
-   * @param ring GeoJSON格式 [lng, lat][]
-   */
-  private pointInPolygon(lng: number, lat: number, ring: number[][]): boolean {
+  private isPointInPoly(lng: number, lat: number, ring: number[][]): boolean {
     let inside = false
-    const n = ring.length
-
-    for (let i = 0, j = n - 1; i < n; j = i++) {
-      // ring[i][0] = lng, ring[i][1] = lat (GeoJSON格式)
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
       const xi = ring[i][0], yi = ring[i][1]
       const xj = ring[j][0], yj = ring[j][1]
 
-      // 标准 ray casting 算法
-      if (((yi > lat) !== (yj > lat)) &&
-          (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
-        inside = !inside
-      }
+      const intersect = ((yi > lat) !== (yj > lat)) &&
+        (lng < (xj - xi) * (lat - yi) / (yj - yi + 0.000000001) + xi)
+      if (intersect) inside = !inside
     }
-
     return inside
   }
 
-  /**
-   * 根据经纬度查找所在国家
-   */
-  public findCountryAtPoint(lat: number, lon: number): string | null {
-    if (!this.geoData) return null
-
-    for (const feature of this.geoData.features) {
-      const name = feature.properties?.ADMIN || feature.properties?.name
-      if (!name) continue
-
-      const geom = feature.geometry as any
-      const polygons: number[][][][] = geom.type === 'Polygon'
-        ? [geom.coordinates]
-        : geom.coordinates
-
-      for (const polygon of polygons) {
-        for (const ring of polygon) {
-          // GeoJSON: ring[i] = [lng, lat]
-          if (this.pointInPolygon(lon, lat, ring)) {
-            return name
-          }
+  public highlightCountry(name: string) {
+    this.highlightedCountry = name
+    this.group.children.forEach(child => {
+      if (child instanceof THREE.Line) {
+        const isTarget = child.userData.country === name
+        const mat = child.material as THREE.LineBasicMaterial
+        if (isTarget) {
+          mat.color.copy(this.highlightMaterial.color)
+          mat.opacity = 1.0
+        } else {
+          mat.color.set(0x00aaff)
+          mat.opacity = 0.1
         }
       }
-    }
-    return null
-  }
-
-  /**
-   * 测试 pointInPolygon 算法
-   */
-  public testPointInPolygon(): void {
-    // 测试1: 原点应该在的简单正方形内
-    // 正方形: 0,0 到 10,10
-    const square = [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]
-
-    const inside = this.pointInPolygon(5, 5, square)  // 注意: lng=5, lat=5
-    const outside = this.pointInPolygon(15, 15, square)
-
-    console.log('pointInPolygon test:')
-    console.log('  (5, 5) inside square? ', inside, '(expected: true)')
-    console.log('  (15, 15) inside square? ', outside, '(expected: false)')
-
-    // 测试2: 中国大致范围
-    const chinaApprox = [[73, 3], [135, 3], [135, 54], [73, 54], [73, 3]]
-    const beijing = this.pointInPolygon(116, 40, chinaApprox)  // 北京
-    const notChina = this.pointInPolygon(-50, -50, chinaApprox)  // 南美
-
-    console.log('  Beijing (116, 40) in China approx? ', beijing, '(expected: true)')
-    console.log('  South America (-50, -50) in China approx? ', notChina, '(expected: false)')
-  }
-
-  /**
-   * 高亮显示国家 - 直接改变边界线颜色
-   */
-  public highlightCountry(countryName: string): void {
-    // 点击同一国家取消高亮
-    if (this.highlightedCountry === countryName) {
-      this.clearHighlight()
-      return
-    }
-
-    this.clearHighlight()
-    this.highlightedCountry = countryName
-
-    // 高亮目标国家边界线
-    this.allLines.forEach((line, key) => {
-      const isTarget = key.startsWith(countryName + '_')
-      const mat = line.material as THREE.LineBasicMaterial
-
-      if (isTarget) {
-        mat.color.copy(this.highlightColor)
-        mat.opacity = 1.0
-      } else {
-        mat.opacity = 0.15
-      }
     })
   }
 
-  /**
-   * 清除高亮
-   */
-  public clearHighlight(): void {
-    if (this.highlightedCountry === null) return
-
-    this.allLines.forEach((line) => {
-      const mat = line.material as THREE.LineBasicMaterial
-      mat.color.copy(this.normalColor)
-      mat.opacity = 0.4
-    })
-
+  public clearHighlight() {
     this.highlightedCountry = null
-  }
-
-  public setVisible(visible: boolean): void {
-    this.group.visible = visible
-  }
-
-  public getBoundaries(): THREE.Line[] {
-    const lines: THREE.Line[] = []
-    this.group.traverse((child) => {
+    this.group.children.forEach(child => {
       if (child instanceof THREE.Line) {
-        lines.push(child)
+        const mat = child.material as THREE.LineBasicMaterial
+        mat.color.set(0x00aaff)
+        mat.opacity = 0.5
       }
     })
-    return lines
-  }
-
-  public dispose(): void {
-    this.clearHighlight()
-
-    this.allLines.forEach((line) => {
-      line.geometry.dispose()
-      ;(line.material as THREE.LineBasicMaterial).dispose()
-    })
-    this.allLines.clear()
-
-    this.countryBounds.clear()
-    this.countryPolygons.clear()
-    this.scene.remove(this.group)
   }
 }

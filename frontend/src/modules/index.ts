@@ -5,7 +5,7 @@
 
 export { EarthScene, type EarthSceneConfig } from './EarthScene'
 export { ParticleEarth, type ParticleEarthConfig } from './ParticleEarth'
-export { GeoLayer, type GeoLayerConfig, type GeoData } from './GeoLayer'
+export { GeoLayer, type GeoLayerConfig } from './GeoLayer'
 export { DataLayer, type DataLayerConfig, type NewsPoint } from './DataLayer'
 export {
   InteractionManager,
