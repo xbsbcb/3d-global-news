@@ -5,7 +5,6 @@
  * 架构：
  * - earthGroup 包含 particleEarth 和 geoLayer
  * - 所有子层跟随 earthGroup 旋转/缩放
- * - 聚焦动画独立于 earthGroup
  */
 
 import { ref, onMounted, onUnmounted, type Ref } from 'vue'
@@ -88,9 +87,7 @@ export function useGlobe(options: UseGlobeOptions) {
     }
 
     // 普通状态缓慢自转（仅在允许时）
-    if (earthScene && interactionManager &&
-        interactionManager.getState() === 'normal' &&
-        interactionManager.isAutoRotateEnabled()) {
+    if (earthScene && interactionManager && interactionManager.isAutoRotateEnabled()) {
       earthScene.earthGroup.rotation.y += 0.0005  // 缓慢自转
     }
 

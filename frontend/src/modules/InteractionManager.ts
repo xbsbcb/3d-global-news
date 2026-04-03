@@ -1,20 +1,15 @@
 /**
  * InteractionManager - 交互管理模块
  *
- * 状态机：
- * - Normal: 相机绑定 earthGroup 旋转/缩放，粒子跟随
- * - Focused: 相机飞向目标，粒子散开/聚拢动画
- *
- * 关键设计：
- * - 普通状态：所有变换通过 earthGroup 完成
- * - 聚焦状态：粒子散开消失，相机飞向目标
- * - 不做任何边界线隔离
+ * 功能：
+ * - 相机绑定 earthGroup 旋转/缩放
+ * - 点击国家显示高亮粒子
+ * - 自动回正
  */
 
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import gsap from 'gsap'
-// import type { ParticleEarth } from './ParticleEarth'  // 暂时禁用散射
 import type { GeoLayer } from './GeoLayer'
 
 export interface FlyToConfig {
@@ -32,31 +27,15 @@ export interface NewsPoint {
   category: string
 }
 
-// 状态
-export const FocusState = {
-  Normal: 'normal',
-  Focused: 'focused'
-} as const
-
-export type FocusStateType = typeof FocusState[keyof typeof FocusState]
-
 export class InteractionManager {
   private camera: THREE.PerspectiveCamera
   private controls: OrbitControls
   private earthGroup: THREE.Group
-  // private particleEarth: ParticleEarth | null = null  // 暂时禁用散射
   private geoLayer: GeoLayer | null = null
   private raycaster: THREE.Raycaster
   private mouse: THREE.Vector2
 
-  // 当前状态
-  private state: FocusStateType = 'normal'
-
-  // 原始 earthGroup 状态（用于回归）
-  private originalGroupRotation = new THREE.Euler()
-  private originalGroupScale = 1.0
-
-  // 聚焦阈值
+  // 点击阈值
   private clickThreshold = 5
   private mouseDownPos = { x: 0, y: 0 }
   private hasDragged = false
@@ -67,32 +46,22 @@ export class InteractionManager {
   private readonly AUTO_CORRECT_DURATION = 0.5  // 回正动画时长
   private readonly TILT_THRESHOLD = 0.15  // 约8.5度阈值
 
-  // 是否允许自动旋转（在聚焦/取消聚焦动画期间禁止）
+  // 是否允许自动旋转
   private autoRotateEnabled = true
 
   constructor(
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
     earthGroup: THREE.Group
-    // particleEarth?: ParticleEarth | null  // 暂时禁用散射
   ) {
     this.camera = camera
     this.controls = controls
     this.earthGroup = earthGroup
-    // this.particleEarth = particleEarth ?? null  // 暂时禁用散射
     this.raycaster = new THREE.Raycaster()
     this.mouse = new THREE.Vector2()
 
-    // 记录初始状态
-    this.originalGroupRotation.copy(earthGroup.rotation)
-    this.originalGroupScale = earthGroup.scale.x
-
     this.initListeners()
   }
-
-  // public setParticleEarth(particleEarth: ParticleEarth): void {
-  //   this.particleEarth = particleEarth
-  // }
 
   public setGeoLayer(geoLayer: GeoLayer): void {
     this.geoLayer = geoLayer
@@ -104,7 +73,6 @@ export class InteractionManager {
       canvas.addEventListener('mousedown', (e) => this.onMouseDown(e))
       canvas.addEventListener('mouseup', (e) => this.onMouseUp(e))
       canvas.addEventListener('click', (e) => this.onCanvasClick(e))
-      canvas.addEventListener('contextmenu', (e) => this.onRightClick(e))
     }
 
     // 监听 controls 变化用于自动回正
@@ -122,8 +90,6 @@ export class InteractionManager {
    * 调度自动回正
    */
   private scheduleAutoCorrect(): void {
-    if (this.state !== 'normal') return
-
     // 清除之前的定时器
     if (this.autoCorrectTimer !== null) {
       clearTimeout(this.autoCorrectTimer)
@@ -147,11 +113,9 @@ export class InteractionManager {
    * 自动回正旋转 - 基于相机位置的 phi 计算
    */
   private autoCorrectRotation(): void {
-    if (this.state !== 'normal') return
     if (!this.controls.enabled) return
 
     // 从相机位置计算当前的 phi（上下倾斜角度）
-    // phi = 0 表示相机在北极正上方，phi = PI/2 表示在赤道高度
     const cameraRadius = this.camera.position.length()
     const phi = Math.acos(Math.abs(this.camera.position.y) / cameraRadius)
 
@@ -196,7 +160,6 @@ export class InteractionManager {
     if (this.hasDragged) return
     if (!this.controls.enabled) return
     if (gsap.isTweening(this.camera.position)) return
-    if (this.state === 'focused') return  // 已是聚焦状态，忽略点击
 
     this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1
     this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1
@@ -207,202 +170,18 @@ export class InteractionManager {
     if (intersects.length > 0) {
       const point = intersects[0].point
       const latLng = this.vector3ToLatLng(point)
-      this.focusTo({
-        lat: latLng.lat,
-        lng: latLng.lng,
-        duration: 1.5
-      })
+
+      // 点击国家地区，显示高亮粒子
+      if (this.geoLayer) {
+        const countryName = this.geoLayer.findCountryAtPoint(latLng.lat, latLng.lng)
+        if (countryName) {
+          this.geoLayer.highlightCountry(countryName)
+        } else {
+          // 点击海洋，清除高亮
+          this.geoLayer.clearHighlight()
+        }
+      }
     }
-  }
-
-  /**
-   * 右键取消聚焦
-   */
-  private onRightClick(event: MouseEvent): void {
-    event.preventDefault()
-    if (this.state === 'focused') {
-      this.cancelFocus()
-    }
-  }
-
-  /**
-   * 聚焦到某区域
-   * 使用点击点的法线方向计算相机位置
-   */
-  public focusToPoint(point: THREE.Vector3, config: FlyToConfig): void {
-    if (this.state === 'focused') return
-    this.state = 'focused'
-
-    // 1. 记录当前 earthGroup 状态
-    this.originalGroupRotation.copy(this.earthGroup.rotation)
-    this.originalGroupScale = this.earthGroup.scale.x
-
-    // 2. 计算聚焦距离
-    const distance = this.calculateFocusDistance(config.lat, config.lng)
-
-    // 3. 使用点击点的法线方向计算相机位置
-    // point 已经是在 earthGroup 空间中的点，直接使用其方向
-    const direction = point.clone().normalize()
-
-    // 相机位置：沿法线方向 * distance
-    const cameraPos = direction.clone().multiplyScalar(distance)
-
-    // target 指向地球表面点
-    const targetPos = direction.clone().multiplyScalar(100)
-
-    this.controls.enabled = false
-
-    const tl = gsap.timeline({
-      onComplete: () => {
-        this.controls.enabled = true
-      }
-    })
-
-    // 相机飞向目标 - 先慢后快
-    tl.to(this.camera.position, {
-      x: cameraPos.x,
-      y: cameraPos.y,
-      z: cameraPos.z,
-      duration: config.duration ?? 1.5,
-      ease: 'power2.in'
-    }, 0)
-
-    // target 指向目标点
-    tl.to(this.controls.target, {
-      x: targetPos.x,
-      y: targetPos.y,
-      z: targetPos.z,
-      duration: config.duration ?? 1.5,
-      ease: 'power2.in',
-      onUpdate: () => {
-        this.camera.lookAt(this.controls.target)
-      }
-    }, 0)
-  }
-
-  /**
-   * 聚焦到某区域（使用经纬度）
-   */
-  public focusTo(config: FlyToConfig): void {
-    if (this.state === 'focused') return
-
-    // 检查是否在海洋（没有国家），海洋禁止聚焦
-    if (this.geoLayer) {
-      const countryName = this.geoLayer.findCountryAtPoint(config.lat, config.lng)
-      if (!countryName) return  // 海洋禁止聚焦
-    }
-
-    this.state = 'focused'
-    this.autoRotateEnabled = false  // 禁止自动旋转
-
-    // 1. 记录当前 earthGroup 状态
-    this.originalGroupRotation.copy(this.earthGroup.rotation)
-    this.originalGroupScale = this.earthGroup.scale.x
-
-    // 2. 计算聚焦距离
-    const distance = this.calculateFocusDistance(config.lat, config.lng)
-
-    // 3. 使用点击点的法线方向
-    const direction = this.latLngToVector3(config.lat, config.lng, 1).normalize()
-    const cameraPos = direction.clone().multiplyScalar(distance)
-    const surfacePoint = direction.clone().multiplyScalar(100)
-
-    this.controls.enabled = false
-
-    const tl = gsap.timeline({
-      onComplete: () => {
-        this.controls.enabled = true
-      }
-    })
-
-    // 相机飞向目标 - 先慢后快
-    tl.to(this.camera.position, {
-      x: cameraPos.x,
-      y: cameraPos.y,
-      z: cameraPos.z,
-      duration: config.duration ?? 1.5,
-      ease: 'power2.in',
-      onUpdate: () => {
-        // 持续更新相机朝向，指向目标点
-        this.camera.lookAt(surfacePoint)
-      }
-    }, 0)
-  }
-
-  /**
-   * 取消聚焦，回归普通状态
-   */
-  public cancelFocus(): void {
-    if (this.state === 'normal') return
-    this.state = 'normal'
-    this.autoRotateEnabled = false  // 禁止自动旋转直到动画完成
-
-    const duration = 0.8
-
-    // 1. 粒子散开 (暂时取消)
-    // if (this.particleEarth) {
-    //   this.particleEarth.setScatter(1.0, 0.3)
-    // }
-
-    // 2. 重置 earthGroup
-    gsap.to(this.earthGroup.rotation, {
-      x: this.originalGroupRotation.x,
-      y: this.originalGroupRotation.y,
-      z: this.originalGroupRotation.z,
-      duration,
-      ease: 'power2.out'
-    })
-
-    gsap.to(this.earthGroup.scale, {
-      x: this.originalGroupScale,
-      y: this.originalGroupScale,
-      z: this.originalGroupScale,
-      duration,
-      ease: 'power2.out'
-    })
-
-    // 3. 相机回归
-    gsap.to(this.camera.position, {
-      x: 0,
-      y: 0,
-      z: 400,
-      duration,
-      ease: 'power2.out',
-      onUpdate: () => {
-        this.camera.lookAt(0, 0, 0)
-      },
-      onComplete: () => {
-        this.controls.enabled = true
-        this.autoRotateEnabled = true  // 动画完成后恢复自动旋转
-        // 4. 粒子聚拢回来 (暂时取消)
-        // if (this.particleEarth) {
-        //   this.particleEarth.setScatter(0.0, 0.4)
-        // }
-      }
-    })
-  }
-
-  /**
-   * 计算聚焦距离 - 基于地理范围，使国家占屏幕比例一致
-   * 大国家 → 高相机（远距离），小国家 → 低相机（近距离）
-   */
-  private calculateFocusDistance(lat: number, lng: number): number {
-    if (!this.geoLayer) return 150
-
-    const countryName = this.geoLayer.findCountryAtPoint(lat, lng)
-    if (!countryName) return 150  // 海洋或其他地区用默认距离
-
-    const bounds = this.geoLayer.getCountryBounds(countryName)
-    if (!bounds) return 150
-
-    const latSpan = bounds.maxLat - bounds.minLat
-    const lngSpan = bounds.maxLng - bounds.minLng
-    const span = Math.max(latSpan, lngSpan, 5)  // 最小跨度5度
-
-    // 基于地理范围计算距离：跨度越大，距离越远（相机越高）
-    // span=5 → distance≈80, span=60 → distance≈250
-    const distance = Math.min(250, Math.max(80, 50 + span * 3.5))
-    return distance
   }
 
   /**
@@ -411,8 +190,25 @@ export class InteractionManager {
   private vector3ToLatLng(point: THREE.Vector3): { lat: number; lng: number } {
     const radius = point.length()
     const lat = 90 - Math.acos(point.y / radius) * (180 / Math.PI)
-    const lng = Math.atan2(point.z, -point.x) * (180 / Math.PI) - 180
-    return { lat, lng: lng < -180 ? lng + 360 : lng }
+
+    // atan2(z, -x) 的范围是 [-PI, PI]
+    // 但 theta = (lng + 180) * PI / 180 的范围是 [0, 2PI]
+    // 需要根据 x 的符号调整
+    let theta = Math.atan2(point.z, -point.x)
+
+    // 如果 x < 0，theta 需要加 PI（因为 -cos 在 x<0 时与 cos 相差 PI）
+    if (point.x < 0) {
+      theta = Math.PI - theta
+    } else {
+      theta = -theta
+    }
+
+    // 转换到 [0, 2PI]
+    if (theta < 0) theta += 2 * Math.PI
+
+    const lng = theta * (180 / Math.PI) - 180
+
+    return { lat, lng }
   }
 
   /**
@@ -430,7 +226,7 @@ export class InteractionManager {
   }
 
   /**
-   * 飞行到指定位置（外部调用）
+   * 飞行到指定位置
    */
   public flyTo(config: FlyToConfig): Promise<void> {
     return new Promise((resolve) => {
@@ -469,10 +265,6 @@ export class InteractionManager {
   public setZoomRange(min: number, max: number): void {
     this.controls.minDistance = min
     this.controls.maxDistance = max
-  }
-
-  public getState(): FocusStateType {
-    return this.state
   }
 
   public isAutoRotateEnabled(): boolean {
