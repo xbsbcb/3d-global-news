@@ -199,7 +199,7 @@ export class GeoLayer {
         const fillPoints3D = externalRing.map((pt: any) =>
           this.latLonToVector3(pt[1], pt[0], this.radius + FILL_OFFSET)
         )
-        const fillMesh = this.createFillMesh(fillPoints3D, name)
+        const fillMesh = this.createFillMesh(fillPoints3D)
         fillMesh.userData = { country: name, isFill: true }
         this.group.add(fillMesh)
 
