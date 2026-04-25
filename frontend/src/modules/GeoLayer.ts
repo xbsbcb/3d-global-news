@@ -112,7 +112,7 @@ export class GeoLayer {
    * 切平面（gnomonic）投影做 earcut 三角剖分。
    * 用多边形 3D 质心法向建切平面，对所有尺寸国家有效。
    */
-  private createFillMesh(ring3D: THREE.Vector3[], countryName: string): THREE.Mesh {
+  private createFillMesh(ring3D: THREE.Vector3[]): THREE.Mesh {
     // 1. 计算球面质心（归一化 = 向外法向）
     const centroid = new THREE.Vector3()
     ring3D.forEach(v => centroid.add(v))
@@ -136,8 +136,14 @@ export class GeoLayer {
     // 4. earcut 三角剖分
     const rawTriangles = earcut(verts2D, undefined, 2)
 
-    // 5. 南极洲的切平面在极点退化，earcut winding 反向，需要翻转
-    const needsFlip = countryName === 'Antarctica'
+    // 5. 几何检测 winding 方向：取第一个三角形，其法向应与 centroid（向外）同向
+    const i0 = rawTriangles[0], i1 = rawTriangles[1], i2 = rawTriangles[2]
+    const a = ring3D[i0], b = ring3D[i1], c = ring3D[i2]
+    const edge1 = new THREE.Vector3().subVectors(b, a)
+    const edge2 = new THREE.Vector3().subVectors(c, a)
+    const triNormal = new THREE.Vector3().crossVectors(edge1, edge2)
+    // triNormal 与 centroid 点积 < 0 说明三角形法向朝球心，需要翻转
+    const needsFlip = triNormal.dot(centroid) < 0
     const triangles = needsFlip
       ? this.flipWinding(rawTriangles)
       : Array.from(rawTriangles)

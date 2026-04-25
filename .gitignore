@@ -6,3 +6,5 @@ backend/examples/
 .env
 backend/.env
 *.db
+node_modules/
+package-lock.json
