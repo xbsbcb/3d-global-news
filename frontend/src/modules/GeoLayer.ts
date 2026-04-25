@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import earcut from 'earcut'
 
 export interface GeoLayerConfig {
   scene: THREE.Object3D
@@ -16,24 +17,27 @@ interface GeoFeature {
 
 interface CountryBounds {
   minLat: number; maxLat: number; minLng: number; maxLng: number;
-  isCrossAntimeridian: boolean; // 是否跨越180度经线
+  isCrossAntimeridian: boolean;
 }
+
+const BORDER_OFFSET = 0.5
+const FILL_OFFSET = 0.35
 
 export class GeoLayer {
   private scene: THREE.Object3D
   private radius: number
   private group: THREE.Group
 
-  private countryMaterial: THREE.LineBasicMaterial
-  private highlightMaterial: THREE.LineBasicMaterial
+  private borderMaterial: THREE.LineBasicMaterial
+  private highlightBorderMaterial: THREE.LineBasicMaterial
+
+  private fillMaterial: THREE.MeshBasicMaterial
+  private fillHighlightMaterial: THREE.MeshBasicMaterial
 
   private countryData: Map<string, {
     bounds: CountryBounds,
-    polygons: number[][][] // 简化为 [环][坐标点]
+    polygons: number[][][]
   }> = new Map()
-
-  private highlightedCountry: string | null = null
-  private readonly OFFSET = 0.5 // 边界线略高于球面
 
   constructor(config: GeoLayerConfig) {
     this.scene = config.scene
@@ -42,21 +46,34 @@ export class GeoLayer {
     this.group = new THREE.Group()
     this.scene.add(this.group)
 
-    this.countryMaterial = new THREE.LineBasicMaterial({
-      color: 0x00aaff,
+    this.borderMaterial = new THREE.LineBasicMaterial({
+      color: 0x0088cc,
       transparent: true,
-      opacity: 0.5
+      opacity: 0.55
     })
 
-    this.highlightMaterial = new THREE.LineBasicMaterial({
+    this.highlightBorderMaterial = new THREE.LineBasicMaterial({
       color: 0xffcc00,
       linewidth: 2
     })
+
+    this.fillMaterial = new THREE.MeshBasicMaterial({
+      color: 0x003366,
+      transparent: true,
+      opacity: 0.25,
+      side: THREE.FrontSide,
+      depthWrite: false
+    })
+
+    this.fillHighlightMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffcc00,
+      transparent: true,
+      opacity: 0.55,
+      side: THREE.FrontSide,
+      depthWrite: false
+    })
   }
 
-  /**
-   * 核心：经纬度转 3D (保持你原来的投影逻辑)
-   */
   public latLonToVector3(lat: number, lon: number, r?: number): THREE.Vector3 {
     const radius = r ?? this.radius
     const phi = (90 - lat) * (Math.PI / 180)
@@ -69,26 +86,14 @@ export class GeoLayer {
     )
   }
 
-  /**
-   * 核心：3D 向量转经纬度 (适配自转与偏移)
-   */
   public vector3ToLatLon(v: THREE.Vector3): [number, number] {
-    // 1. 将世界坐标转为本地坐标，抵消 group 的旋转影响
     const localV = this.group.worldToLocal(v.clone()).normalize()
-
-    // 2. 反算纬度: y = cos(phi)
     const phi = Math.acos(localV.y)
     const lat = 90 - (phi * 180 / Math.PI)
-
-    // 3. 反算经度: x = -sin(phi)cos(theta), z = sin(phi)sin(theta)
-    // 根据 atan2(z, -x) 得到 theta
     let theta = Math.atan2(localV.z, -localV.x)
     let lon = (theta * 180 / Math.PI) - 180
-
-    // 4. 标准化经度范围 [-180, 180]
     while (lon <= -180) lon += 360
     while (lon > 180) lon -= 360
-
     return [lat, lon]
   }
 
@@ -103,6 +108,48 @@ export class GeoLayer {
     }
   }
 
+  /**
+   * 将球面多边形顶点投影到切平面，earcut 三角剖分后返回 Mesh
+   */
+  private createFillMesh(ring3D: THREE.Vector3[]): THREE.Mesh {
+    // 计算多边形在球面上的质心（归一化 = 向外法向）
+    const centroid = new THREE.Vector3()
+    ring3D.forEach(v => centroid.add(v))
+    centroid.divideScalar(ring3D.length)
+    centroid.normalize()
+
+    // 建立切平面局部坐标系：forward = 质心法向
+    const forward = centroid
+    const worldUp = new THREE.Vector3(0, 1, 0)
+    let right = new THREE.Vector3().crossVectors(worldUp, forward).normalize()
+    if (right.length() < 0.01) right.set(1, 0, 0)
+    const up = new THREE.Vector3().crossVectors(forward, right).normalize()
+
+    // 4. 3D 点投影到切平面的 2D 坐标
+    const verts2D: number[] = []
+    for (const v of ring3D) {
+      verts2D.push(v.dot(right), v.dot(up))
+    }
+
+    // 5. earcut 三角剖分
+    const triangles = earcut(verts2D, undefined, 2)
+
+    // 6. 构建 BufferGeometry（使用原始 3D 坐标）
+    const positions = new Float32Array(ring3D.length * 3)
+    for (let i = 0; i < ring3D.length; i++) {
+      positions[i * 3] = ring3D[i].x
+      positions[i * 3 + 1] = ring3D[i].y
+      positions[i * 3 + 2] = ring3D[i].z
+    }
+
+    const geom = new THREE.BufferGeometry()
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    geom.setIndex(Array.from(triangles))
+    geom.computeVertexNormals()
+
+    return new THREE.Mesh(geom, this.fillMaterial.clone())
+  }
+
   private parseAndDraw(features: GeoFeature[]) {
     features.forEach(feature => {
       const name = feature.properties?.ADMIN || feature.properties?.name || 'Unknown'
@@ -115,23 +162,31 @@ export class GeoLayer {
       let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180
 
       polygons.forEach((poly: any) => {
-        // poly[0] 是外环
-        const externalRing = poly[0]
+        const externalRing = poly[0] as number[][]
         allRings.push(externalRing)
 
+        // 收集边界包围盒
         externalRing.forEach((pt: any) => {
           const [lng, lat] = pt
           minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat)
           minLng = Math.min(minLng, lng); maxLng = Math.max(maxLng, lng)
         })
 
-        // 绘制边界
-        const points = externalRing.map((pt: any) => this.latLonToVector3(pt[1], pt[0], this.radius + this.OFFSET))
-        const geometry = new THREE.BufferGeometry().setFromPoints(points)
-        const line = new THREE.Line(geometry, this.countryMaterial.clone())
+        // --- 填充面 ---
+        const fillPoints3D = externalRing.map((pt: any) =>
+          this.latLonToVector3(pt[1], pt[0], this.radius + FILL_OFFSET)
+        )
+        const fillMesh = this.createFillMesh(fillPoints3D)
+        fillMesh.userData = { country: name, isFill: true }
+        this.group.add(fillMesh)
 
-        // 将国家名称存入 userData 方便后续遍历
-        line.userData = { country: name }
+        // --- 边界线 ---
+        const linePoints = externalRing.map((pt: any) =>
+          this.latLonToVector3(pt[1], pt[0], this.radius + BORDER_OFFSET)
+        )
+        const lineGeom = new THREE.BufferGeometry().setFromPoints(linePoints)
+        const line = new THREE.Line(lineGeom, this.borderMaterial.clone())
+        line.userData = { country: name, isBorder: true }
         this.group.add(line)
       })
 
@@ -145,19 +200,13 @@ export class GeoLayer {
     })
   }
 
-  /**
-   * 点击检测触发
-   * @param worldPoint Raycaster 碰撞得到的交点 (Vector3)
-   */
   public onGlobeClick(worldPoint: THREE.Vector3): string | null {
     const [lat, lon] = this.vector3ToLatLon(worldPoint)
-
     let foundCountry: string | null = null
 
     for (const [name, data] of this.countryData.entries()) {
       const { bounds, polygons } = data
 
-      // 1. 粗筛 (Bounding Box)
       const inLat = lat >= bounds.minLat && lat <= bounds.maxLat
       let inLng = false
       if (bounds.isCrossAntimeridian) {
@@ -167,7 +216,6 @@ export class GeoLayer {
       }
 
       if (inLat && inLng) {
-        // 2. 精筛 (Point-in-Polygon)
         for (const ring of polygons) {
           if (this.isPointInPoly(lon, lat, ring)) {
             foundCountry = name
@@ -179,12 +227,20 @@ export class GeoLayer {
     }
 
     if (foundCountry) {
+      foundCountry = this.normalizeCountryName(foundCountry)
       this.highlightCountry(foundCountry)
     } else {
       this.clearHighlight()
     }
-
     return foundCountry
+  }
+
+  private normalizeCountryName(name: string): string {
+    const taiwanNames = ['Taiwan', 'Republic of China', 'ROC', 'Taiwan Province', 'Taiwan, Province of China']
+    if (taiwanNames.some(n => name.toLowerCase().includes(n.toLowerCase()))) {
+      return 'China'
+    }
+    return name
   }
 
   private isPointInPoly(lng: number, lat: number, ring: number[][]): boolean {
@@ -192,7 +248,6 @@ export class GeoLayer {
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
       const xi = ring[i][0], yi = ring[i][1]
       const xj = ring[j][0], yj = ring[j][1]
-
       const intersect = ((yi > lat) !== (yj > lat)) &&
         (lng < (xj - xi) * (lat - yi) / (yj - yi + 0.000000001) + xi)
       if (intersect) inside = !inside
@@ -201,29 +256,58 @@ export class GeoLayer {
   }
 
   public highlightCountry(name: string) {
-    this.highlightedCountry = name
+    const chinaRelated = ['China', 'Taiwan', 'Hong Kong', 'Macau', 'Macao']
+
     this.group.children.forEach(child => {
-      if (child instanceof THREE.Line) {
-        const isTarget = child.userData.country === name
+      const country = child.userData.country as string
+      const isTarget = country === name || (name === 'China' && chinaRelated.includes(country))
+
+      if (child instanceof THREE.Mesh) {
+        const mat = child.material as THREE.MeshBasicMaterial
+        if (isTarget) {
+          mat.color.copy(this.fillHighlightMaterial.color)
+          mat.opacity = this.fillHighlightMaterial.opacity
+        } else {
+          mat.color.copy(this.fillMaterial.color)
+          mat.opacity = 0.06
+        }
+      } else if (child instanceof THREE.Line) {
         const mat = child.material as THREE.LineBasicMaterial
         if (isTarget) {
-          mat.color.copy(this.highlightMaterial.color)
+          mat.color.copy(this.highlightBorderMaterial.color)
           mat.opacity = 1.0
         } else {
-          mat.color.set(0x00aaff)
-          mat.opacity = 0.1
+          mat.color.set(0x0088cc)
+          mat.opacity = 0.08
         }
       }
     })
   }
 
   public clearHighlight() {
-    this.highlightedCountry = null
     this.group.children.forEach(child => {
-      if (child instanceof THREE.Line) {
+      if (child instanceof THREE.Mesh) {
+        const mat = child.material as THREE.MeshBasicMaterial
+        mat.color.copy(this.fillMaterial.color)
+        mat.opacity = this.fillMaterial.opacity
+      } else if (child instanceof THREE.Line) {
         const mat = child.material as THREE.LineBasicMaterial
-        mat.color.set(0x00aaff)
-        mat.opacity = 0.5
+        mat.color.set(0x0088cc)
+        mat.opacity = 0.55
+      }
+    })
+  }
+
+  public dispose() {
+    this.scene.remove(this.group)
+    this.group.traverse((child) => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+        child.geometry.dispose()
+        if (Array.isArray(child.material)) {
+          child.material.forEach(m => m.dispose())
+        } else if (child.material instanceof THREE.Material) {
+          child.material.dispose()
+        }
       }
     })
   }
