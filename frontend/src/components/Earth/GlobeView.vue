@@ -1,333 +1,373 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useGlobe } from '@/modules/useGlobe'
-import { useNewsStore } from '@/stores/newsStore'
-import type { News } from '@/api'
-
-import SearchBar from '@/components/UI/SearchBar.vue'
-import CategoryFilter from '@/components/UI/CategoryFilter.vue'
-import StatsPanel from '@/components/UI/StatsPanel.vue'
-import NewsPopup from '@/components/News/NewsPopup.vue'
+import { nameToCode } from '@/countries'
 
 const globeContainer = ref<HTMLElement | null>(null)
+const selectedCountry = ref<string | null>(null)
+const countryNews = ref<any[]>([])
+const isLoading = ref(false)
+const showPanel = ref(false)
 
-const newsStore = useNewsStore()
+const totalNews = ref(0)
 
-const {
-  isReady,
-  setNewsData,
-  flyTo
-} = useGlobe({
+useGlobe({
   container: globeContainer,
   particleCount: 50000,
-  radius: 100
+  radius: 100,
+  onCountryClick: handleCountryClick
 })
 
-// 监听新闻数据变化，更新地球
-watch(() => newsStore.newsWithCoordinates, (news) => {
-  if (news.length > 0) {
-    const newsPoints = news.map(n => ({
-      id: String(n.id),
-      lat: n.latitude!,
-      lng: n.longitude!,
-      title: n.title,
-      category: n.category,
-      value: 0.5
-    }))
-    setNewsData(newsPoints)
-  }
-}, { immediate: true })
+async function handleCountryClick(countryName: string) {
+  selectedCountry.value = countryName
+  showPanel.value = true
+  await triggerFetchAndLoad(countryName)
+}
 
-// 初始化加载数据
-onMounted(async () => {
-  await newsStore.initialize()
+async function triggerFetchAndLoad(country: string) {
+  isLoading.value = true
+  try {
+    const countryCode = nameToCode(country)
+
+    // 请求后端（后端负责12h过期检测和数据抓取）
+    const result = await triggerApiFetch(countryCode)
+    console.log('triggerApiFetch result:', result)
+
+    if (!result.ok) {
+      // 获取失败：清空数据，不显示旧数据
+      countryNews.value = []
+      return
+    }
+
+    // 读取数据库中最新数据并展示
+    await fetchCountryNews(countryCode)
+  } finally {
+    isLoading.value = false
+  }
+}
+
+async function triggerApiFetch(countryCode: string): Promise<{ ok: boolean; fetched: number; already_fetched: boolean }> {
+  try {
+    const fetchRes = await fetch('/api/fetch-news', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ country: countryCode, language: 'en' })
+    })
+    if (!fetchRes.ok) {
+      console.error('获取新闻失败，HTTP状态码:', fetchRes.status)
+      return { ok: false, fetched: 0, already_fetched: false }
+    }
+    const fetchJson = await fetchRes.json()
+    console.log('fetch-news response:', JSON.stringify(fetchJson))
+    if (!fetchJson.success) {
+      console.warn('fetch-news failed:', fetchJson.message)
+      return { ok: false, fetched: 0, already_fetched: false }
+    }
+    const data = fetchJson.data ?? {}
+    return {
+      ok: true,
+      fetched: data.fetched ?? 0,
+      already_fetched: data.already_fetched ?? false
+    }
+  } catch (e) {
+    console.error('触发获取新闻失败:', e)
+    return { ok: false, fetched: 0, already_fetched: false }
+  }
+}
+
+async function fetchCountryNews(country: string) {
+  try {
+    const res = await fetch(`/api/news?country=${encodeURIComponent(country)}&limit=1`)
+    const json = await res.json()
+    if (json.success && json.data.items) {
+      countryNews.value = json.data.items
+    }
+  } catch (e) {
+    console.error('获取新闻失败:', e)
+    countryNews.value = []
+  }
+}
+
+async function fetchStats() {
+  try {
+    const res = await fetch('/api/stats')
+    const json = await res.json()
+    if (json.success && json.data) {
+      totalNews.value = json.data.total_news || 0
+    }
+  } catch (e) {
+    console.error('获取统计失败:', e)
+  }
+}
+
+function closePanel() {
+  showPanel.value = false
+}
+
+onMounted(() => {
+  fetchStats()
 })
-
-function handleNewsClick(news: News) {
-  newsStore.selectNews(news)
-  if (news.latitude && news.longitude) {
-    flyTo(news.latitude, news.longitude, 120)
-  }
-}
-
-function handleFlyToBeijing() {
-  flyTo(39.9, 116.4, 120)
-}
-
-function handleFlyToNewYork() {
-  flyTo(40.7, -74.0, 120)
-}
 </script>
 
 <template>
   <div class="globe-view">
-    <!-- 3D 地球容器 -->
     <div ref="globeContainer" class="globe-container"></div>
 
-    <!-- 顶部控制栏 -->
-    <div class="top-bar">
-      <div class="logo">
-        <span class="logo-icon">🌍</span>
-        <span class="logo-text">GlobeNews</span>
-      </div>
-
-      <div class="controls">
-        <SearchBar
-          v-model="newsStore.searchKeyword"
-        />
-        <CategoryFilter
-          v-model="newsStore.selectedCategory"
-          :categories="newsStore.categories"
-        />
+    <!-- 底部统计栏 -->
+    <div class="stats-bar">
+      <div class="stat-item">
+        <span class="stat-label">新闻总数</span>
+        <span class="stat-value">{{ totalNews }}</span>
       </div>
     </div>
 
-    <!-- 底部状态栏 -->
-    <div class="bottom-bar">
-      <StatsPanel :stats="newsStore.stats" />
-
-      <div class="actions">
-        <button
-          class="action-btn"
-          @click="newsStore.triggerFetch"
-          :disabled="newsStore.isLoading"
-        >
-          {{ newsStore.isLoading ? '采集中...' : '采集新闻' }}
-        </button>
-        <button class="action-btn secondary" @click="handleFlyToBeijing">北京</button>
-        <button class="action-btn secondary" @click="handleFlyToNewYork">纽约</button>
+    <!-- 底部面板：紧凑横条 -->
+    <div class="news-bottom-panel" :class="{ open: showPanel }">
+      <div class="panel-header">
+        <div class="panel-title">
+          <span class="country-flag">📍</span>
+          <h3>{{ selectedCountry }}</h3>
+          <span class="news-count" v-if="countryNews.length">{{ countryNews.length }} 条</span>
+        </div>
+        <button class="close-btn" @click="closePanel">×</button>
       </div>
-    </div>
 
-    <!-- 新闻列表侧边栏 -->
-    <div class="news-sidebar">
-      <h3>新闻列表 ({{ newsStore.filteredNews.length }})</h3>
-      <div class="news-list">
-        <div
-          v-for="news in newsStore.filteredNews"
-          :key="news.id"
-          class="news-item"
-          @click="handleNewsClick(news)"
-        >
-          <span class="news-category" :style="{ background: getCategoryColor(news.category) }">
-            {{ news.category }}
-          </span>
-          <span class="news-title">{{ news.title }}</span>
-          <span class="news-source">{{ news.source }}</span>
+      <div class="panel-content">
+        <div v-if="isLoading" class="loading-row">
+          <span class="loading-dot"></span>
+          <span class="loading-text">加载中...</span>
+        </div>
+        <div v-else-if="countryNews.length === 0" class="loading-row">
+          <span class="loading-text">暂无新闻</span>
+        </div>
+        <div v-else class="news-ticker">
+          <a
+            v-for="news in countryNews"
+            :key="news.id"
+            :href="news.source_url"
+            target="_blank"
+            class="news-item"
+          >
+            <span class="news-source">{{ news.source }}</span>
+            <span class="news-title">{{ news.title }}</span>
+          </a>
         </div>
       </div>
     </div>
-
-    <!-- 加载状态 -->
-    <div v-if="!isReady || newsStore.isLoading" class="loading-overlay">
-      <div class="loading-spinner"></div>
-      <span>加载中...</span>
-    </div>
-
-    <!-- 新闻详情弹窗 -->
-    <NewsPopup
-      v-if="newsStore.selectedNews"
-      :news="newsStore.selectedNews"
-      @close="newsStore.selectNews(null)"
-    />
   </div>
 </template>
 
-<script lang="ts">
-// 辅助函数
-function getCategoryColor(category: string): string {
-  const colors: Record<string, string> = {
-    politics: '#ff6b6b',
-    finance: '#4ecdc4',
-    technology: '#00d4ff',
-    society: '#ffe66d',
-    sports: '#95e1d3',
-    entertainment: '#f38181',
-    general: '#a0a0a0',
-  }
-  return colors[category.toLowerCase()] || colors.general
-}
-</script>
-
 <style scoped>
-.globe-view {
-  width: 100%;
-  height: 100vh;
-  position: relative;
-  background: #0a0a0f;
+* {
+  box-sizing: border-box;
 }
 
-.globe-container {
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
   width: 100%;
   height: 100%;
 }
 
-/* 顶部控制栏 */
-.top-bar {
+.globe-view {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  background: #0a0a0f;
+  overflow: hidden;
+}
+
+.globe-container {
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
-  background: linear-gradient(to bottom, rgba(10, 10, 15, 0.9), transparent);
+  width: 100%;
+  height: 100%;
 }
 
-.logo {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.logo-icon {
-  font-size: 28px;
-}
-
-.logo-text {
-  color: #fff;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.controls {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-}
-
-/* 底部状态栏 */
-.bottom-bar {
+/* 底部统计栏 */
+.stats-bar {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
-  background: linear-gradient(to top, rgba(10, 10, 15, 0.9), transparent);
+  gap: 24px;
+  padding: 10px 20px;
+  background: linear-gradient(to top, rgba(10, 10, 15, 0.9) 0%, transparent 100%);
+  z-index: 10;
+  pointer-events: none;
 }
 
-.actions {
+.stat-item {
   display: flex;
-  gap: 12px;
+  align-items: center;
+  gap: 8px;
 }
 
-.action-btn {
-  background: rgba(0, 212, 255, 0.2);
-  border: 1px solid #00d4ff;
-  color: #00d4ff;
-  padding: 8px 16px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-  transition: all 0.2s;
-}
-
-.action-btn:hover {
-  background: rgba(0, 212, 255, 0.4);
-}
-
-.action-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.action-btn.secondary {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.3);
-  color: #fff;
-}
-
-.action-btn.secondary:hover {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-/* 新闻列表侧边栏 */
-.news-sidebar {
-  position: absolute;
-  top: 80px;
-  right: 24px;
-  width: 320px;
-  max-height: calc(100vh - 160px);
-  background: rgba(26, 26, 46, 0.9);
-  border: 1px solid rgba(0, 212, 255, 0.3);
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-.news-sidebar h3 {
-  color: #fff;
-  font-size: 14px;
-  padding: 12px 16px;
-  margin: 0;
-  border-bottom: 1px solid rgba(0, 212, 255, 0.2);
-}
-
-.news-list {
-  max-height: calc(100vh - 200px);
-  overflow-y: auto;
-}
-
-.news-item {
-  padding: 12px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.news-item:hover {
-  background: rgba(0, 212, 255, 0.1);
-}
-
-.news-category {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 10px;
-  color: #0a0a0f;
-  font-weight: 600;
-  margin-bottom: 6px;
-}
-
-.news-title {
-  display: block;
-  color: #fff;
-  font-size: 13px;
-  line-height: 1.4;
-  margin-bottom: 4px;
-}
-
-.news-source {
-  color: #a0a0a0;
+.stat-label {
+  color: rgba(255, 255, 255, 0.5);
   font-size: 11px;
 }
 
-/* 加载状态 */
-.loading-overlay {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
+.stat-value {
   color: #00d4ff;
+  font-size: 13px;
+  font-weight: 600;
 }
 
-.loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid rgba(0, 212, 255, 0.3);
-  border-top-color: #00d4ff;
+/* 底部面板 */
+.news-bottom-panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(12, 12, 22, 0.95);
+  border-top: 1px solid rgba(0, 212, 255, 0.25);
+  backdrop-filter: blur(16px);
+  transform: translateY(100%);
+  transition: transform 0.3s ease;
+  z-index: 20;
+}
+
+.news-bottom-panel.open {
+  transform: translateY(0);
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.country-flag {
+  font-size: 14px;
+}
+
+.panel-title h3 {
+  margin: 0;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.news-count {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.close-btn:hover {
+  color: #fff;
+}
+
+.panel-content {
+  overflow: hidden;
+}
+
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.loading-dot {
+  width: 6px;
+  height: 6px;
+  background: #00d4ff;
   border-radius: 50%;
-  animation: spin 1s linear infinite;
+  animation: pulse 1s ease-in-out infinite;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.loading-text {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+}
+
+/* 横条滚动 */
+.news-ticker {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 212, 255, 0.3) transparent;
+}
+
+.news-ticker::-webkit-scrollbar {
+  height: 3px;
+}
+
+.news-ticker::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.news-ticker::-webkit-scrollbar-thumb {
+  background: rgba(0, 212, 255, 0.3);
+  border-radius: 2px;
+}
+
+.news-item {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+  padding: 12px 16px;
+  text-decoration: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  transition: background 0.15s;
+  cursor: pointer;
+}
+
+.news-item:hover {
+  background: rgba(0, 212, 255, 0.08);
+}
+
+.news-source {
+  flex-shrink: 0;
+  color: #00d4ff;
+  font-size: 10px;
+  font-weight: 500;
+  background: rgba(0, 212, 255, 0.12);
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.news-title {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>
