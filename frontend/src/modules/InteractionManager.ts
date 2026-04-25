@@ -79,13 +79,11 @@ export class InteractionManager {
       canvas.addEventListener('mousedown', (e) => this.onMouseDown(e))
       canvas.addEventListener('mouseup', (e) => this.onMouseUp(e))
       canvas.addEventListener('click', (e) => this.onCanvasClick(e))
+      canvas.addEventListener('contextmenu', (e) => this.onContextMenu(e))
     }
 
     // 监听 controls 变化用于自动回正
     this.controls.addEventListener('change', () => this.onControlsChange())
-
-    // 右键取消聚焦
-    canvas.addEventListener('contextmenu', (e) => this.onContextMenu(e))
   }
 
   /**
