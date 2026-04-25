@@ -48,7 +48,7 @@ export class InteractionManager {
 
   // 自动回正定时器
   private autoCorrectTimer: number | null = null
-  private readonly AUTO_CORRECT_DELAY = 1000  // 1秒后自动回正
+  private readonly AUTO_CORRECT_DELAY = 3000  // 3秒后自动回正
   private readonly AUTO_CORRECT_DURATION = 0.5  // 回正动画时长
   private readonly TILT_THRESHOLD = 0.15  // 约8.5度阈值
 

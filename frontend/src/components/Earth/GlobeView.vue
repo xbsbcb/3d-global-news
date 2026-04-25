@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import { useGlobe } from '@/modules/useGlobe'
 import { nameToCode } from '@/countries'
 
@@ -8,8 +8,6 @@ const selectedCountry = ref<string | null>(null)
 const countryNews = ref<any[]>([])
 const isLoading = ref(false)
 const showPanel = ref(false)
-
-const totalNews = ref(0)
 
 function handleRightClick() {
   showPanel.value = false
@@ -94,38 +92,15 @@ async function fetchCountryNews(country: string) {
   }
 }
 
-async function fetchStats() {
-  try {
-    const res = await fetch('/api/stats')
-    const json = await res.json()
-    if (json.success && json.data) {
-      totalNews.value = json.data.total_news || 0
-    }
-  } catch (e) {
-    console.error('获取统计失败:', e)
-  }
-}
-
 function closePanel() {
   showPanel.value = false
 }
 
-onMounted(() => {
-  fetchStats()
-})
 </script>
 
 <template>
   <div class="globe-view">
     <div ref="globeContainer" class="globe-container"></div>
-
-    <!-- 底部统计栏 -->
-    <div class="stats-bar">
-      <div class="stat-item">
-        <span class="stat-label">新闻总数</span>
-        <span class="stat-value">{{ totalNews }}</span>
-      </div>
-    </div>
 
     <!-- 底部面板：紧凑横条 -->
     <div class="news-bottom-panel" :class="{ open: showPanel }">
@@ -190,37 +165,6 @@ html, body {
   left: 0;
   width: 100%;
   height: 100%;
-}
-
-/* 底部统计栏 */
-.stats-bar {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  gap: 24px;
-  padding: 10px 20px;
-  background: linear-gradient(to top, rgba(10, 10, 15, 0.9) 0%, transparent 100%);
-  z-index: 10;
-  pointer-events: none;
-}
-
-.stat-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.stat-label {
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 11px;
-}
-
-.stat-value {
-  color: #00d4ff;
-  font-size: 13px;
-  font-weight: 600;
 }
 
 /* 底部面板 */
