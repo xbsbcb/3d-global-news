@@ -98,7 +98,7 @@ export class GeoLayer {
   }
 
   public async load(): Promise<void> {
-    const url = 'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson'
+    const url = '/countries.geojson'
     try {
       const res = await fetch(url)
       const data = await res.json()
@@ -109,32 +109,112 @@ export class GeoLayer {
   }
 
   /**
-   * 将球面多边形顶点投影到切平面，earcut 三角剖分后返回 Mesh
+   * 用 equirectangular 投影做 earcut 三角剖分，原 3D 坐标构建几何。
+   * 对跨大纬度范围（>35°）的多边形按纬度带拆分，各自独立剖分。
    */
-  private createFillMesh(ring3D: THREE.Vector3[]): THREE.Mesh {
-    // 计算多边形在球面上的质心（归一化 = 向外法向）
-    const centroid = new THREE.Vector3()
-    ring3D.forEach(v => centroid.add(v))
-    centroid.divideScalar(ring3D.length)
-    centroid.normalize()
+  private createFillMeshes(
+    ringLatLng: number[][],  // [lng, lat][]
+    fillR: number
+  ): THREE.Mesh[] {
+    const latSpan = this.latRange(ringLatLng)
+    if (latSpan > 35) {
+      // 按 30° 纬度带拆分
+      const bands = this.splitByLatitude(ringLatLng, 30)
+      return bands.flatMap(band => this.buildSingleFillMesh(band, fillR))
+    }
+    return [this.buildSingleFillMesh(ringLatLng, fillR)]
+  }
 
-    // 建立切平面局部坐标系：forward = 质心法向
-    const forward = centroid
-    const worldUp = new THREE.Vector3(0, 1, 0)
-    let right = new THREE.Vector3().crossVectors(worldUp, forward).normalize()
-    if (right.length() < 0.01) right.set(1, 0, 0)
-    const up = new THREE.Vector3().crossVectors(forward, right).normalize()
+  private latRange(ring: number[][]): number {
+    let min = 90, max = -90
+    for (const p of ring) { min = Math.min(min, p[1]); max = Math.max(max, p[1]) }
+    return max - min
+  }
 
-    // 4. 3D 点投影到切平面的 2D 坐标
+  /** 沿纬度线切割多边形环 */
+  private splitByLatitude(ring: number[][], bandSize: number): number[][][] {
+    const minLat = Math.min(...ring.map(p => p[1]))
+    const maxLat = Math.max(...ring.map(p => p[1]))
+    const bands: number[][][] = []
+
+    for (let lo = minLat; lo < maxLat; lo += bandSize) {
+      const hi = lo + bandSize
+      const clipped = this.clipRingToLatBand(ring, lo, hi)
+      if (clipped && clipped.length >= 3) bands.push(clipped)
+    }
+    return bands.length > 0 ? bands : [ring]
+  }
+
+  /** Sutherland-Hodgman 裁剪到 [latLo, latHi] */
+  private clipRingToLatBand(ring: number[][], latLo: number, latHi: number): number[][] | null {
+    let result = ring
+    result = this.clipEdge(result, true, latLo)   // 裁下界
+    result = this.clipEdge(result, false, latHi)  // 裁上界
+    if (result.length < 3) return null
+
+    // 封闭多边形：确保首尾相连
+    if (result[0][0] !== result[result.length - 1][0] ||
+        result[0][1] !== result[result.length - 1][1]) {
+      result.push([result[0][0], result[0][1]])
+    }
+    return result
+  }
+
+  /** 沿一条纬度线裁剪多边形，keepAbove=true 保留上方（lat > boundary） */
+  private clipEdge(ring: number[][], keepAbove: boolean, boundary: number): number[][] {
+    const out: number[][] = []
+    for (let i = 0; i < ring.length; i++) {
+      const curr = ring[i]
+      const prev = ring[i === 0 ? ring.length - 1 : i - 1]
+      const currInside = keepAbove ? curr[1] >= boundary : curr[1] <= boundary
+      const prevInside = keepAbove ? prev[1] >= boundary : prev[1] <= boundary
+
+      if (currInside) {
+        if (!prevInside) {
+          out.push(this.intersectLat(prev, curr, boundary))
+        }
+        out.push([curr[0], curr[1]])
+      } else if (prevInside) {
+        out.push(this.intersectLat(prev, curr, boundary))
+      }
+    }
+    return out
+  }
+
+  /** 计算线段与纬度线的交点 */
+  private intersectLat(a: number[], b: number[], targetLat: number): number[] {
+    const t = (targetLat - a[1]) / (b[1] - a[1])
+    return [a[0] + t * (b[0] - a[0]), targetLat]
+  }
+
+  /** 构建单个填充 Mesh */
+  private buildSingleFillMesh(ringLatLng: number[][], fillR: number): THREE.Mesh {
+    // 1. 处理跨 180° 经线：把负经度全部 +360
+    const lngs = ringLatLng.map(p => p[0])
+    const minLng = Math.min(...lngs), maxLng = Math.max(...lngs)
+    const crossesAM = maxLng - minLng > 180
+
+    const normalized = ringLatLng.map(p => {
+      const lng = crossesAM && p[0] < 0 ? p[0] + 360 : p[0]
+      return [lng, p[1]] as [number, number]
+    })
+
+    // 2. equirectangular 投影作为 earcut 2D 输入
+    const avgLat = (Math.min(...ringLatLng.map(p => p[1])) + Math.max(...ringLatLng.map(p => p[1]))) / 2
+    const cosLat = Math.cos(avgLat * Math.PI / 180)
     const verts2D: number[] = []
-    for (const v of ring3D) {
-      verts2D.push(v.dot(right), v.dot(up))
+    for (const [lng, lat] of normalized) {
+      verts2D.push(lng * cosLat, lat)
     }
 
-    // 5. earcut 三角剖分
+    // 3. earcut 三角剖分
     const triangles = earcut(verts2D, undefined, 2)
 
-    // 6. 构建 BufferGeometry（使用原始 3D 坐标）
+    // 4. 3D 坐标（注意 ringLatLng 格式是 [lng, lat]）
+    const ring3D = ringLatLng.map(([lng, lat]) =>
+      this.latLonToVector3(lat, lng, fillR)
+    )
+
     const positions = new Float32Array(ring3D.length * 3)
     for (let i = 0; i < ring3D.length; i++) {
       positions[i * 3] = ring3D[i].x
@@ -173,12 +253,11 @@ export class GeoLayer {
         })
 
         // --- 填充面 ---
-        const fillPoints3D = externalRing.map((pt: any) =>
-          this.latLonToVector3(pt[1], pt[0], this.radius + FILL_OFFSET)
-        )
-        const fillMesh = this.createFillMesh(fillPoints3D)
-        fillMesh.userData = { country: name, isFill: true }
-        this.group.add(fillMesh)
+        const meshes = this.createFillMeshes(externalRing, this.radius + FILL_OFFSET)
+        meshes.forEach(m => {
+          m.userData = { country: name, isFill: true }
+          this.group.add(m)
+        })
 
         // --- 边界线 ---
         const linePoints = externalRing.map((pt: any) =>

@@ -35,6 +35,12 @@ export class InteractionManager {
   private raycaster: THREE.Raycaster
   private mouse: THREE.Vector2
 
+  // 点击回调
+  public onCountryClick: ((countryName: string) => void) | null = null
+
+  // 右键取消聚焦回调
+  public onRightClick: (() => void) | null = null
+
   // 点击阈值
   private clickThreshold = 5
   private mouseDownPos = { x: 0, y: 0 }
@@ -77,6 +83,9 @@ export class InteractionManager {
 
     // 监听 controls 变化用于自动回正
     this.controls.addEventListener('change', () => this.onControlsChange())
+
+    // 右键取消聚焦
+    canvas.addEventListener('contextmenu', (e) => this.onContextMenu(e))
   }
 
   /**
@@ -197,10 +206,12 @@ export class InteractionManager {
         latLng
       })
 
-      // 点击国家，显示高亮（直接调用 GeoLayer 的 onGlobeClick）
+      // 点击国家，显示高亮并触发回调
       if (this.geoLayer) {
         const countryName = this.geoLayer.onGlobeClick(worldPoint)
-        console.log('Selected Country:', countryName)
+        if (countryName && this.onCountryClick) {
+          this.onCountryClick(countryName)
+        }
       }
     }
   }
@@ -272,6 +283,23 @@ export class InteractionManager {
         ease: 'power2.inOut'
       }, 0)
     })
+  }
+
+  /** 右键：取消聚焦，重置视角 */
+  private onContextMenu(event: MouseEvent): void {
+    event.preventDefault()
+    // 终止正在进行的飞行动画
+    gsap.killTweensOf(this.camera.position)
+    gsap.killTweensOf(this.controls.target)
+    this.controls.enabled = true
+    // 清除高亮
+    if (this.geoLayer) {
+      this.geoLayer.clearHighlight()
+    }
+    // 通知父组件
+    if (this.onRightClick) {
+      this.onRightClick()
+    }
   }
 
   public setZoomRange(min: number, max: number): void {

@@ -11,11 +11,17 @@ const showPanel = ref(false)
 
 const totalNews = ref(0)
 
+function handleRightClick() {
+  showPanel.value = false
+  selectedCountry.value = null
+}
+
 useGlobe({
   container: globeContainer,
   particleCount: 50000,
   radius: 100,
-  onCountryClick: handleCountryClick
+  onCountryClick: handleCountryClick,
+  onRightClick: handleRightClick
 })
 
 async function handleCountryClick(countryName: string) {

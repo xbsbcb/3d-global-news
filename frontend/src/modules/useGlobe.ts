@@ -21,10 +21,12 @@ export interface UseGlobeOptions {
   container: Ref<HTMLElement | null>
   particleCount?: number
   radius?: number
+  onCountryClick?: (countryName: string) => void
+  onRightClick?: () => void
 }
 
 export function useGlobe(options: UseGlobeOptions) {
-  const { container, particleCount = 50000, radius = 100 } = options
+  const { container, particleCount = 50000, radius = 100, onCountryClick, onRightClick } = options
 
   let earthScene: EarthScene | null = null
   let particleEarth: ParticleEarth | null = null
@@ -72,6 +74,17 @@ export function useGlobe(options: UseGlobeOptions) {
       earthScene.earthGroup
     )
     interactionManager.setGeoLayer(geoLayer)
+
+    // 设置国家点击回调
+    if (onCountryClick) {
+      interactionManager.onCountryClick = onCountryClick
+    }
+
+    // 设置右键取消回调
+    interactionManager.onRightClick = () => {
+      if (geoLayer) geoLayer.clearHighlight()
+      if (onRightClick) onRightClick()
+    }
 
     isReady.value = true
     animate()
